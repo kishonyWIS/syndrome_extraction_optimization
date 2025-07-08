@@ -110,7 +110,7 @@ def optimize_cx_order(css_code, problematic_ancilla: int):
     css_code.set_cx_order(stab_type, stab_idx, new_order)
 
 
-def optimize_circuit_cx_orders(css_code, n_shots: int = 10000, noise_prob: float = 0.001, n_steps: int = 5) -> Optional[List[Tuple[float, int, List[int]]]]:
+def optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps=100, n_rounds=3) -> Optional[List[Tuple[float, int, List[int]]]]:
     """
     Main optimization loop that:
     1. Builds circuit
@@ -126,7 +126,7 @@ def optimize_circuit_cx_orders(css_code, n_shots: int = 10000, noise_prob: float
     for step in range(n_steps):
         print(f"\n--- Optimization step {step+1}/{n_steps} ---")
         # Build circuit
-        circuit = build_memory_experiment_circuit(css_code, n_rounds=3, noise_prob=noise_prob)
+        circuit = build_memory_experiment_circuit(css_code, n_rounds=n_rounds, noise_prob=noise_prob)
         # Analyze errors (with decoding)
         error_rate, qubit_freqs = analyze_circuit_errors(circuit, n_shots)
         if not qubit_freqs:
@@ -147,35 +147,4 @@ def optimize_circuit_cx_orders(css_code, n_shots: int = 10000, noise_prob: float
         history.append((error_rate, worst_ancilla[0], new_cx_order))
     if not history:
         return None
-    return history
-
-
-def main():
-    d = 7
-    css_code = RotatedSurfaceCode(d)
-    n_steps = 100
-    print(f"Running optimization for Rotated Surface Code with distance {d} for {n_steps} steps...")
-    results = optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps=n_steps)
-    if results is not None:
-        for i, (error_rate, worst_ancilla, new_cx_order) in enumerate(results):
-            print(f"\nStep {i+1} results:")
-            print(f"  Logical error rate: {error_rate:.4f}")
-            print(f"  Most problematic ancilla: {worst_ancilla}")
-            print(f"  New CX order for this stabilizer: {new_cx_order}")
-        # Extract step numbers and logical error rates
-        steps = list(range(1, len(results) + 1))
-        logical_error_rates = [r[0] for r in results]
-
-        plt.figure(figsize=(8, 5))
-        plt.plot(steps, logical_error_rates, marker='o')
-        plt.xlabel("Optimization Step")
-        plt.ylabel("Logical Error Rate")
-        plt.title("Logical Error Rate vs Optimization Step")
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-    else:
-        print("Optimization did not complete successfully.")
-
-if __name__ == "__main__":
-    main() 
+    return history 

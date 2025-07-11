@@ -4,9 +4,9 @@ import matplotlib.pyplot as plt
 
 
 def main():
-    d = 7
-    n_steps = 100
-    n_rounds = 7  # Number of rounds for the memory experiment
+    d = 5
+    n_steps = 50
+    n_rounds = d  # Number of rounds for the memory experiment
     css_code = RotatedSurfaceCode(d)
     print(f"Running optimization for Rotated Surface Code with distance {d} for {n_steps} steps, n_rounds={n_rounds}...")
     results = optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps=n_steps, n_rounds=n_rounds)
@@ -24,6 +24,7 @@ def main():
         plt.show()
     else:
         print("Optimization did not complete successfully.")
+    print()
 
 if __name__ == "__main__":
     main() 

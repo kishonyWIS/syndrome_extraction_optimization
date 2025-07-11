@@ -8,7 +8,7 @@ from stim_circuit_builder import build_memory_experiment_circuit
 from rotated_surface_code import RotatedSurfaceCode
 import matplotlib.pyplot as plt
 
-def analyze_circuit_errors(circuit: stim.Circuit, 
+def analyze_circuit_errors(circuit: stim.Circuit,
                          n_shots: int = 10000) -> Tuple[float, Dict[int, float]]:
     """
     Analyzes error patterns in a memory experiment circuit and identifies problematic qubits.
@@ -25,11 +25,18 @@ def analyze_circuit_errors(circuit: stim.Circuit,
     """
     # Get detector error model and compile sampler
     dem = circuit.detector_error_model()
+    
+    # List out the errors, for later lookup
+    error_instructions = []
+    for instruction in dem.flattened():
+        if instruction.type == 'error':
+            error_instructions.append(instruction)
+    
     sampler = dem.compile_sampler()
     
     try:
         # Create decoder from detector error model
-        matching = pymatching.Matching.from_detector_error_model(dem)
+        decoder = pymatching.Matching.from_detector_error_model(dem)
         
         # Sample with error tracking
         sample_results: Tuple[np.ndarray, np.ndarray, Union[np.ndarray, None]] = sampler.sample(shots=n_shots, return_errors=True)
@@ -39,11 +46,8 @@ def analyze_circuit_errors(circuit: stim.Circuit,
             print("No error information returned from sampler")
             return 0.0, {}
             
-        # Get circuit error explanations
-        circuit_errors = circuit.explain_detector_error_model_errors()
-            
         # Decode each shot
-        predicted_observables = matching.decode_batch(dets)
+        predicted_observables = decoder.decode_batch(dets)
         
         # Check if any logical operator was wrongly corrected
         # For multiple observables, check if any observable was wrongly corrected
@@ -64,9 +68,18 @@ def analyze_circuit_errors(circuit: stim.Circuit,
             # Get the error mechanisms for this shot
             shot_errors = errs[shot_idx]
             
-            # For each error that occurred
-            for error_idx in np.where(shot_errors)[0]:
-                explanation = circuit_errors[error_idx]
+            # Create a filter DEM containing only the errors that occurred in this shot
+            dem_filter = stim.DetectorErrorModel()
+            for error_index in np.flatnonzero(shot_errors):
+                dem_filter.append(error_instructions[error_index])
+            
+            # Get circuit error explanations only for this shot's errors
+            circuit_errors = circuit.explain_detector_error_model_errors(
+                dem_filter=dem_filter,
+            )
+            
+            # For each error explanation (corresponds to errors in dem_filter)
+            for explanation in circuit_errors:
                 # Find the set of qubits that appear as targets in ALL circuit_error_locations
                 if explanation.circuit_error_locations:
                     # For each location, get the set of qubit indices in flipped_pauli_product
@@ -142,6 +155,7 @@ def optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps
         print(f"Most problematic ancilla: {worst_ancilla[0]} (involved in {worst_ancilla[1]:.1%} of logical errors)")
         # Determine if it's an X or Z stabilizer ancilla and optimize its CX order
         stab_type, stab_idx = css_code.ancilla_index_to_stabilizer(worst_ancilla[0])
+        print(f"Optimizing CX order for stabilizer {stab_type} {stab_idx}")
         optimize_cx_order(css_code, worst_ancilla[0])
         new_cx_order = css_code.get_cx_order(stab_type, stab_idx)
         history.append((error_rate, worst_ancilla[0], new_cx_order))

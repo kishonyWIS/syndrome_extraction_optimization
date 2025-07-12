@@ -1,6 +1,6 @@
 import stim
 import numpy as np
-from typing import List, Set, Dict, Tuple, Optional, Any, Union
+from typing import List, Set, Dict, Tuple, Optional, Any, Union, Callable
 from collections import defaultdict
 import random
 import pymatching
@@ -8,14 +8,15 @@ from stim_circuit_builder import build_memory_experiment_circuit
 from rotated_surface_code import RotatedSurfaceCode
 import matplotlib.pyplot as plt
 
-def analyze_circuit_errors(circuit: stim.Circuit,
-                         n_shots: int = 10000) -> Tuple[float, Dict[int, float]]:
+def analyze_circuit_errors_unified(circuit: stim.Circuit,
+                                 decoder: Callable[[np.ndarray], Union[np.ndarray, Tuple[np.ndarray, Any]]],
+                                 n_shots: int = 10000) -> Tuple[float, Dict[int, float]]:
     """
-    Analyzes error patterns in a memory experiment circuit and identifies problematic qubits.
-    Uses PyMatching to decode syndromes before computing logical error rate.
+    Unified error analysis function that works with any decoder.
     
     Args:
         circuit: The memory experiment circuit
+        decoder: Function that takes detector measurements and returns predicted observables
         n_shots: Number of shots to sample
         
     Returns:
@@ -35,9 +36,6 @@ def analyze_circuit_errors(circuit: stim.Circuit,
     sampler = dem.compile_sampler()
     
     try:
-        # Create decoder from detector error model
-        decoder = pymatching.Matching.from_detector_error_model(dem)
-        
         # Sample with error tracking
         sample_results: Tuple[np.ndarray, np.ndarray, Union[np.ndarray, None]] = sampler.sample(shots=n_shots, return_errors=True)
         dets, obs, errs = sample_results
@@ -46,14 +44,22 @@ def analyze_circuit_errors(circuit: stim.Circuit,
             print("No error information returned from sampler")
             return 0.0, {}
             
-        # Decode each shot
-        predicted_observables = decoder.decode_batch(dets)
+        # Decode each shot using the provided decoder
+        predicted_observables = decoder(dets)
+        
+        # Handle the return type - decode returns either ndarray or Tuple[ndarray, dict]
+        if isinstance(predicted_observables, tuple):
+            predicted_observables = predicted_observables[0]  # Extract the array from the tuple
+        
+        # Ensure predicted_observables has the right shape for comparison
+        if predicted_observables.ndim == 1:
+            predicted_observables = predicted_observables.reshape(-1, 1)
         
         # Check if any logical operator was wrongly corrected
         # For multiple observables, check if any observable was wrongly corrected
         logical_errors = np.logical_xor(predicted_observables, obs).any(axis=1)  # Any observable wrong
         logical_error_rate = float(np.mean(logical_errors))
-        print(f"Logical error rate (after decoding): {logical_error_rate:.3f}")
+        print(f"Logical error rate (after decoding): {logical_error_rate}")
         
         # Track qubit involvement in failed shots
         qubit_involvement = defaultdict(int)
@@ -104,6 +110,28 @@ def analyze_circuit_errors(circuit: stim.Circuit,
     except Exception as e:
         print(f"Error during sampling or decoding: {e}")
         return 0.0, {}
+
+def analyze_circuit_errors(circuit: stim.Circuit,
+                         n_shots: int = 10000) -> Tuple[float, Dict[int, float]]:
+    """
+    Analyzes error patterns in a memory experiment circuit and identifies problematic qubits.
+    Uses PyMatching to decode syndromes before computing logical error rate.
+    
+    Args:
+        circuit: The memory experiment circuit
+        n_shots: Number of shots to sample
+        
+    Returns:
+        Tuple of:
+        - Logical error rate (after decoding)
+        - Dictionary mapping qubit indices to their error involvement frequency
+    """
+    # Create decoder from detector error model
+    dem = circuit.detector_error_model()
+    decoder = pymatching.Matching.from_detector_error_model(dem)
+    
+    # Use the unified function with PyMatching decoder
+    return analyze_circuit_errors_unified(circuit, decoder.decode_batch, n_shots)
 
 def optimize_cx_order(css_code, problematic_ancilla: int):
     """

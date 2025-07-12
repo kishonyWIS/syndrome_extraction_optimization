@@ -57,6 +57,7 @@ def analyze_circuit_errors(circuit: stim.Circuit, colorcode: ColorCode,
     
     Args:
         circuit: The memory experiment circuit
+        colorcode: ColorCode instance with decode method
         n_shots: Number of shots to sample
         
     Returns:
@@ -64,87 +65,11 @@ def analyze_circuit_errors(circuit: stim.Circuit, colorcode: ColorCode,
         - Logical error rate (after decoding)
         - Dictionary mapping qubit indices to their error involvement frequency
     """
-    # Get detector error model and compile sampler
-    dem = circuit.detector_error_model()
+    # Import the unified function
+    from stim_error_analyzer import analyze_circuit_errors_unified
     
-    # List out the errors, for later lookup
-    error_instructions = []
-    for instruction in dem.flattened():
-        if instruction.type == 'error':
-            error_instructions.append(instruction)
-    
-    sampler = dem.compile_sampler()
-    
-    # Sample with error tracking
-    sample_results: Tuple[np.ndarray, np.ndarray, Union[np.ndarray, None]] = sampler.sample(shots=n_shots, return_errors=True)
-    dets, obs, errs = sample_results
-    
-    if errs is None:
-        print("No error information returned from sampler")
-        return 0.0, {}
-        
-    # Decode each shot
-    predicted_observables = colorcode.decode(dets)
-    
-    # Handle the return type - decode returns either ndarray or Tuple[ndarray, dict]
-    if isinstance(predicted_observables, tuple):
-        predicted_observables = predicted_observables[0]  # Extract the array from the tuple
-    
-    # Ensure predicted_observables has the right shape for comparison
-    if predicted_observables.ndim == 1:
-        predicted_observables = predicted_observables.reshape(-1, 1)
-    
-    # Check if any logical operator was wrongly corrected
-    # For multiple observables, check if any observable was wrongly corrected
-    logical_errors = np.logical_xor(predicted_observables, obs).any(axis=1)  # Any observable wrong
-    logical_error_rate = float(np.mean(logical_errors))
-    print(f"Logical error rate (after decoding): {logical_error_rate}")
-    
-    # Track qubit involvement in failed shots
-    qubit_involvement = defaultdict(int)
-    n_failed_shots = 0
-    
-    # Get indices of shots with logical errors
-    error_shot_indices = np.where(logical_errors)[0]
-    n_failed_shots = len(error_shot_indices)
-    
-    # Analyze each shot with a logical error (after decoding)
-    for shot_idx in error_shot_indices:
-        # Get the error mechanisms for this shot
-        shot_errors = errs[shot_idx]
-        
-        # Create a filter DEM containing only the errors that occurred in this shot
-        dem_filter = stim.DetectorErrorModel()
-        for error_index in np.flatnonzero(shot_errors):
-            dem_filter.append(error_instructions[error_index])
-        
-        # Get circuit error explanations only for this shot's errors
-        circuit_errors = circuit.explain_detector_error_model_errors(
-            dem_filter=dem_filter,
-        )
-        
-        # For each error explanation (corresponds to errors in dem_filter)
-        for explanation in circuit_errors:
-            # Find the set of qubits that appear as targets in ALL circuit_error_locations
-            if explanation.circuit_error_locations:
-                # For each location, get the set of qubit indices in flipped_pauli_product
-                sets_of_qubits = [
-                    set(target.gate_target.value for target in loc.flipped_pauli_product)
-                    for loc in explanation.circuit_error_locations
-                ]
-                # Find intersection (qubits present in all locations)
-                if sets_of_qubits:
-                    common_qubits = set.intersection(*sets_of_qubits)
-                    for qubit_idx in common_qubits:
-                        qubit_involvement[qubit_idx] += 1
-    
-    # Convert counts to frequencies
-    qubit_frequencies = {
-        q: count / max(n_failed_shots, 1)  # Avoid division by zero
-        for q, count in qubit_involvement.items()
-    }
-    
-    return logical_error_rate, qubit_frequencies
+    # Use the unified function with color code decoder
+    return analyze_circuit_errors_unified(circuit, colorcode.decode, n_shots)
 
 
 def randomize_stabilizer_cx_order(cnot_schedule_dict, stab_type, stab_idx):
@@ -268,7 +193,7 @@ def visualize_stabilizer_schedules(colorcode, stabilizer_type='X', colormap_name
             print(f"No valid data qubits found for stabilizer {stab_idx}")
 
 def main_optimization(
-    d=7, rounds=7, n_steps=30, n_shots=100000, p_cnot=5e-3, tri_optimal_schedule=None, random_init=True
+    d=7, rounds=7, n_steps=30, n_shots=100000, p_cnot=1e-3, tri_optimal_schedule=None, random_init=True
 ):
     if tri_optimal_schedule is None:
         tri_optimal_schedule = [2, 3, 6, 5, 4, 1, 3, 4, 7, 6, 5, 2]

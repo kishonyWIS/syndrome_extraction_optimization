@@ -5,6 +5,7 @@ import numpy as np
 import stim
 from typing import Tuple, Dict, Union
 from collections import defaultdict
+import pickle
 
 def draw_lattice_with_individual_colors(code, qubit_colors=None, **kwargs):
     """
@@ -50,7 +51,7 @@ def draw_lattice_with_individual_colors(code, qubit_colors=None, **kwargs):
     return ax
 
 def analyze_circuit_errors(circuit: stim.Circuit, colorcode: ColorCode,
-                         n_shots: int = 10000) -> Tuple[float, Dict[int, float]]:
+                         n_shots: int = 10000) -> Tuple[float, Tuple[float, float], Dict[int, float]]:
     """
     Analyzes error patterns in a memory experiment circuit and identifies problematic qubits.
     Uses color code decoder to decode syndromes before computing logical error rate.
@@ -63,6 +64,7 @@ def analyze_circuit_errors(circuit: stim.Circuit, colorcode: ColorCode,
     Returns:
         Tuple of:
         - Logical error rate (after decoding)
+        - Confidence interval (lower, upper) for the error rate
         - Dictionary mapping qubit indices to their error involvement frequency
     """
     # Import the unified function
@@ -88,15 +90,15 @@ def build_color_code_with_schedule(d, rounds, cnot_schedule_dict, p_cnot=1e-3):
         p_cnot=p_cnot,
     )
 
-def get_initial_cnot_schedule_dict(colorcode, tri_optimal_schedule, random_init=False):
+def get_initial_cnot_schedule_dict(colorcode, tri_optimal_schedule, init_option='benchmark', history_step=None):
     """Create a dict of lists of lists for the initial schedule.
     
     Args:
         colorcode: The ColorCode instance
         tri_optimal_schedule: The base tri-optimal schedule
-        random_init: If True, each stabilizer gets a random order. If False, all stabilizers use the same sorted order.
+        init_option: One of 'benchmark', 'random', 'uniform_random', or 'history'
+        history_step: Step number to load from history file (only used if init_option='history')
     """
-
     tri_optimal_schedule = [2, 3, 6, 5, 4, 1, 3, 4, 7, 6, 5, 2]
     z_target_schedule = np.argsort(tri_optimal_schedule[:6]).tolist()
     x_target_schedule = np.argsort(tri_optimal_schedule[6:]).tolist()
@@ -105,7 +107,31 @@ def get_initial_cnot_schedule_dict(colorcode, tri_optimal_schedule, random_init=
     num_z_stabs = len(colorcode.qubit_groups['anc_Z'])
     num_x_stabs = len(colorcode.qubit_groups['anc_X'])
 
-    if random_init:
+    if init_option == 'history':
+        # Load schedule from history file
+        if history_step is None:
+            raise ValueError("history_step must be specified when init_option='history'")
+        
+        try:
+            with open('history.pkl', 'rb') as f:
+                history = pickle.load(f)
+            
+            if history_step >= len(history):
+                raise ValueError(f"history_step {history_step} is out of range. History has {len(history)} steps (0-indexed)")
+            
+            # Get the schedule from the specified step
+            _, _, _, _, _, cnot_schedule_dict = history[history_step]
+            print(f"Loaded CNOT schedule from history step {history_step}")
+            return cnot_schedule_dict
+            
+        except FileNotFoundError:
+            print("Warning: history.pkl not found, falling back to benchmark initialization")
+            init_option = 'benchmark'
+        except Exception as e:
+            print(f"Warning: Error loading history step {history_step}: {e}, falling back to benchmark initialization")
+            init_option = 'benchmark'
+    
+    if init_option == 'random':
         # Create random orders for each stabilizer
         z_schedules = []
         for _ in range(num_z_stabs):
@@ -118,10 +144,21 @@ def get_initial_cnot_schedule_dict(colorcode, tri_optimal_schedule, random_init=
             random_order = x_target_schedule[:]  # Copy the base schedule
             random.shuffle(random_order)  # Randomly shuffle it
             x_schedules.append(random_order)
-    else:
+    elif init_option == 'uniform_random':
+        # Create one random order for all Z stabilizers and one for all X stabilizers
+        z_random_order = z_target_schedule[:]  # Copy the base schedule
+        random.shuffle(z_random_order)  # Randomly shuffle it once
+        z_schedules = [z_random_order for _ in range(num_z_stabs)]
+        
+        x_random_order = x_target_schedule[:]  # Copy the base schedule
+        random.shuffle(x_random_order)  # Randomly shuffle it once
+        x_schedules = [x_random_order for _ in range(num_x_stabs)]
+    elif init_option == 'benchmark':
         # Use the same sorted order for all stabilizers (original behavior)
         z_schedules = [z_target_schedule for _ in range(num_z_stabs)]
         x_schedules = [x_target_schedule for _ in range(num_x_stabs)]
+    else:
+        raise ValueError(f"Invalid init_option: {init_option}. Must be one of 'benchmark', 'random', 'uniform_random', or 'history'")
 
     cnot_schedule_dict = {
         'Z': z_schedules,
@@ -192,15 +229,35 @@ def visualize_stabilizer_schedules(colorcode, stabilizer_type='X', colormap_name
         else:
             print(f"No valid data qubits found for stabilizer {stab_idx}")
 
+def list_history_steps():
+    """List available history steps and their error rates from history.pkl file."""
+    try:
+        with open('history.pkl', 'rb') as f:
+            history = pickle.load(f)
+        
+        print(f"Available history steps (0-{len(history)-1}):")
+        print("Step | Error Rate | Confidence Interval")
+        print("-" * 50)
+        for i, (error_rate, confidence_interval, worst_ancilla, stab_type, stab_idx, _) in enumerate(history):
+            print(f"{i:4d} | {error_rate:.6f} | [{confidence_interval[0]:.6f}, {confidence_interval[1]:.6f}]")
+        return len(history)
+    except FileNotFoundError:
+        print("No history.pkl file found.")
+        return 0
+    except Exception as e:
+        print(f"Error reading history file: {e}")
+        return 0
+
 def main_optimization(
-    d=7, rounds=7, n_steps=30, n_shots=100000, p_cnot=1e-3, tri_optimal_schedule=None, random_init=True
+    d=7, rounds=7, n_steps=20, n_shots=100000, p_cnot=1e-3, tri_optimal_schedule=None, 
+    init_option='random', history_step=None
 ):
     if tri_optimal_schedule is None:
         tri_optimal_schedule = [2, 3, 6, 5, 4, 1, 3, 4, 7, 6, 5, 2]
 
     # Build initial ColorCode to get stabilizer counts
     colorcode = ColorCode(d=d, rounds=rounds, cnot_schedule="tri_optimal", p_cnot=p_cnot)
-    cnot_schedule_dict = get_initial_cnot_schedule_dict(colorcode, tri_optimal_schedule, random_init)
+    cnot_schedule_dict = get_initial_cnot_schedule_dict(colorcode, tri_optimal_schedule, init_option, history_step)
 
     history = []
     for step in range(n_steps):
@@ -208,8 +265,9 @@ def main_optimization(
         # Build ColorCode with current schedule
         colorcode = build_color_code_with_schedule(d, rounds, cnot_schedule_dict, p_cnot)
         circuit = colorcode.circuit
+
         # Analyze errors
-        error_rate, qubit_freqs = analyze_circuit_errors(circuit, colorcode, n_shots)
+        error_rate, confidence_interval, qubit_freqs = analyze_circuit_errors(circuit, colorcode, n_shots)
         if not qubit_freqs:
             print("No problematic qubits found")
             break
@@ -231,16 +289,44 @@ def main_optimization(
         print(f"Optimizing CX order for stabilizer {stab_type} {stab_idx}")
         randomize_stabilizer_cx_order(cnot_schedule_dict, stab_type, stab_idx)
         new_cx_order = cnot_schedule_dict.copy()
-        history.append((error_rate, worst_ancilla, stab_type, stab_idx, new_cx_order))
+        history.append((error_rate, confidence_interval, worst_ancilla, stab_type, stab_idx, new_cx_order))
     return history, colorcode
 
 if __name__ == "__main__":
-    history, colorcode = main_optimization() 
+    # Example usage with different initialization options:
+    
+    # Option 1: Benchmark initialization (tri_optimal_schedule)
+    # print("Running with benchmark initialization...")
+    # history, colorcode = main_optimization(init_option='benchmark')
+    
+    # Option 2: Random initialization (different random order for each stabilizer)
+    print("Running with random initialization...")
+    history, colorcode = main_optimization(init_option='random')
+    
+    # Option 3: Uniform random initialization (same random order for all X stabilizers, same for all Z stabilizers)
+    # print("Running with uniform random initialization...")
+    # history, colorcode = main_optimization(init_option='uniform_random')
+    
+    # Option 4: History initialization (load from step 5)
+    # print("Running with history initialization from step 5...")
+    # history, colorcode = main_optimization(init_option='history', history_step=5)
+    
+    # Helper: List available history steps
+    # list_history_steps()
+    
     steps = list(range(1, len(history) + 1))
     logical_error_rates = [r[0] for r in history]
+    confidence_intervals = [r[1] for r in history]
+    
+    # Calculate error bar values
+    error_lower = [r - ci[0] for r, ci in zip(logical_error_rates, confidence_intervals)]
+    error_upper = [ci[1] - r for r, ci in zip(logical_error_rates, confidence_intervals)]
+
+    with open('history.pkl', 'wb') as f:
+        pickle.dump(history, f)
 
     plt.figure(figsize=(8, 5))
-    plt.plot(steps, logical_error_rates, marker='o')
+    plt.errorbar(steps, logical_error_rates, yerr=[error_lower, error_upper], marker='o', capsize=5, capthick=1)
     plt.xlabel("Optimization Step")
     plt.ylabel("Logical Error Rate")
     plt.title("Logical Error Rate vs Optimization Step")
@@ -249,6 +335,5 @@ if __name__ == "__main__":
     plt.show()
     print()
 
-    # Visualize X stabilizer CNOT schedules
     visualize_stabilizer_schedules(colorcode, stabilizer_type='X')
     print()

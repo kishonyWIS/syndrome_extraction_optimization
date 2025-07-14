@@ -13,9 +13,14 @@ def main():
     if results is not None:
         steps = list(range(1, len(results) + 1))
         logical_error_rates = [r[0] for r in results]
+        confidence_intervals = [r[1] for r in results]
+        
+        # Calculate error bar values (confidence_intervals are tuples of (lower, upper))
+        error_lower = [r - ci[0] for r, ci in zip(logical_error_rates, confidence_intervals)]
+        error_upper = [ci[1] - r for r, ci in zip(logical_error_rates, confidence_intervals)]
 
         plt.figure(figsize=(8, 5))
-        plt.plot(steps, logical_error_rates, marker='o')
+        plt.errorbar(steps, logical_error_rates, yerr=[error_lower, error_upper], marker='o', capsize=5, capthick=1)
         plt.xlabel("Optimization Step")
         plt.ylabel("Logical Error Rate")
         plt.title("Logical Error Rate vs Optimization Step")

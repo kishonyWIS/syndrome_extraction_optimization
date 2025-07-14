@@ -7,10 +7,39 @@ import pymatching
 from stim_circuit_builder import build_memory_experiment_circuit
 from rotated_surface_code import RotatedSurfaceCode
 import matplotlib.pyplot as plt
+from scipy import stats
+
+def wilson_score_interval(successes: int, total: int, confidence: float = 0.95) -> Tuple[float, float]:
+    """
+    Calculate Wilson score interval for binomial proportion.
+    
+    Args:
+        successes: Number of successful events (logical errors in our case)
+        total: Total number of trials (shots)
+        confidence: Confidence level (default 0.95 for 95% confidence)
+    
+    Returns:
+        Tuple of (lower_bound, upper_bound)
+    """
+    if total == 0:
+        return (0.0, 0.0)
+    
+    z = stats.norm.ppf((1 + confidence) / 2)
+    p_hat = successes / total
+    
+    # Wilson score interval formula
+    denominator = 1 + z**2 / total
+    centre_adjusted_probability = float((p_hat + z * z / (2 * total)) / denominator)
+    adjusted_standard_error = float(z * np.sqrt((p_hat * (1 - p_hat) + z * z / (4 * total)) / total) / denominator)
+    
+    lower_bound = max(0.0, centre_adjusted_probability - adjusted_standard_error)
+    upper_bound = min(1.0, centre_adjusted_probability + adjusted_standard_error)
+    
+    return (lower_bound, upper_bound)
 
 def analyze_circuit_errors_unified(circuit: stim.Circuit,
                                  decoder: Callable[[np.ndarray], Union[np.ndarray, Tuple[np.ndarray, Any]]],
-                                 n_shots: int = 10000) -> Tuple[float, Dict[int, float]]:
+                                 n_shots: int = 10000) -> Tuple[float, Tuple[float, float], Dict[int, float]]:
     """
     Unified error analysis function that works with any decoder.
     
@@ -22,6 +51,7 @@ def analyze_circuit_errors_unified(circuit: stim.Circuit,
     Returns:
         Tuple of:
         - Logical error rate (after decoding)
+        - Confidence interval (lower, upper) for the error rate
         - Dictionary mapping qubit indices to their error involvement frequency
     """
     # Get detector error model and compile sampler
@@ -42,7 +72,7 @@ def analyze_circuit_errors_unified(circuit: stim.Circuit,
         
         if errs is None:
             print("No error information returned from sampler")
-            return 0.0, {}
+            return 0.0, (0.0, 0.0), {}
             
         # Decode each shot using the provided decoder
         predicted_observables = decoder(dets)
@@ -58,8 +88,13 @@ def analyze_circuit_errors_unified(circuit: stim.Circuit,
         # Check if any logical operator was wrongly corrected
         # For multiple observables, check if any observable was wrongly corrected
         logical_errors = np.logical_xor(predicted_observables, obs).any(axis=1)  # Any observable wrong
+        n_errors = int(np.sum(logical_errors))
         logical_error_rate = float(np.mean(logical_errors))
-        print(f"Logical error rate (after decoding): {logical_error_rate}")
+        
+        # Calculate confidence interval
+        confidence_interval = wilson_score_interval(n_errors, n_shots)
+        
+        print(f"Logical error rate (after decoding): {logical_error_rate:.6f} [{confidence_interval[0]:.6f}, {confidence_interval[1]:.6f}]")
         
         # Track qubit involvement in failed shots
         qubit_involvement = defaultdict(int)
@@ -105,14 +140,14 @@ def analyze_circuit_errors_unified(circuit: stim.Circuit,
             for q, count in qubit_involvement.items()
         }
         
-        return logical_error_rate, qubit_frequencies
+        return logical_error_rate, confidence_interval, qubit_frequencies
         
     except Exception as e:
         print(f"Error during sampling or decoding: {e}")
-        return 0.0, {}
+        return 0.0, (0.0, 0.0), {}
 
 def analyze_circuit_errors(circuit: stim.Circuit,
-                         n_shots: int = 10000) -> Tuple[float, Dict[int, float]]:
+                         n_shots: int = 10000) -> Tuple[float, Tuple[float, float], Dict[int, float]]:
     """
     Analyzes error patterns in a memory experiment circuit and identifies problematic qubits.
     Uses PyMatching to decode syndromes before computing logical error rate.
@@ -124,6 +159,7 @@ def analyze_circuit_errors(circuit: stim.Circuit,
     Returns:
         Tuple of:
         - Logical error rate (after decoding)
+        - Confidence interval (lower, upper) for the error rate
         - Dictionary mapping qubit indices to their error involvement frequency
     """
     # Create decoder from detector error model
@@ -151,7 +187,7 @@ def optimize_cx_order(css_code, problematic_ancilla: int):
     css_code.set_cx_order(stab_type, stab_idx, new_order)
 
 
-def optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps=100, n_rounds=3) -> Optional[List[Tuple[float, int, List[int]]]]:
+def optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps=100, n_rounds=3) -> Optional[List[Tuple[float, Tuple[float, float], int, List[int]]]]:
     """
     Main optimization loop that:
     1. Builds circuit
@@ -161,7 +197,7 @@ def optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps
     Repeats for n_steps.
     
     Returns:
-        Optional list of (error_rate, worst_ancilla_idx, new_cx_order) for each step
+        Optional list of (error_rate, confidence_interval, worst_ancilla_idx, new_cx_order) for each step
     """
     history = []
     for step in range(n_steps):
@@ -169,7 +205,7 @@ def optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps
         # Build circuit
         circuit = build_memory_experiment_circuit(css_code, n_rounds=n_rounds, noise_prob=noise_prob)
         # Analyze errors (with decoding)
-        error_rate, qubit_freqs = analyze_circuit_errors(circuit, n_shots)
+        error_rate, confidence_interval, qubit_freqs = analyze_circuit_errors(circuit, n_shots)
         if not qubit_freqs:
             print("No problematic qubits found")
             break
@@ -186,7 +222,7 @@ def optimize_circuit_cx_orders(css_code, n_shots=10000, noise_prob=0.01, n_steps
         print(f"Optimizing CX order for stabilizer {stab_type} {stab_idx}")
         optimize_cx_order(css_code, worst_ancilla[0])
         new_cx_order = css_code.get_cx_order(stab_type, stab_idx)
-        history.append((error_rate, worst_ancilla[0], new_cx_order))
+        history.append((error_rate, confidence_interval, worst_ancilla[0], new_cx_order))
     if not history:
         return None
     return history 

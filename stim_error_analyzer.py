@@ -121,18 +121,29 @@ def analyze_circuit_errors_unified(circuit: stim.Circuit,
             
             # For each error explanation (corresponds to errors in dem_filter)
             for explanation in circuit_errors:
-                # Find the set of qubits that appear as targets in ALL circuit_error_locations
+                # Get the set of qubits for the circuit error location with the smallest number of qubits
+                # If there's a tie, choose randomly from among the locations with the same number of qubits
                 if explanation.circuit_error_locations:
-                    # For each location, get the set of qubit indices in flipped_pauli_product
-                    sets_of_qubits = [
-                        set(target.gate_target.value for target in loc.flipped_pauli_product)
-                        for loc in explanation.circuit_error_locations
-                    ]
-                    # Find intersection (qubits present in all locations)
-                    if sets_of_qubits:
-                        common_qubits = set.intersection(*sets_of_qubits)
-                        for qubit_idx in common_qubits:
-                            qubit_involvement[qubit_idx] += 1
+                    # Get qubit sets for each circuit error location
+                    qubit_sets = []
+                    for circuit_error in explanation.circuit_error_locations:
+                        targets = circuit_error.flipped_pauli_product
+                        qubit_indices = set(target.gate_target.value for target in targets)
+                        qubit_sets.append(qubit_indices)
+                    
+                    # Find the minimum size
+                    min_size = min(len(qubit_set) for qubit_set in qubit_sets)
+                    
+                    # Find all locations with the minimum size
+                    min_size_locations = [i for i, qubit_set in enumerate(qubit_sets) if len(qubit_set) == min_size]
+                    
+                    # Choose randomly from the minimum size locations
+                    chosen_location = random.choice(min_size_locations)
+                    
+                    # Use the qubits from the chosen location
+                    chosen_qubits = qubit_sets[chosen_location]
+                    for qubit_idx in chosen_qubits:
+                        qubit_involvement[qubit_idx] += 1
         
         # Convert counts to frequencies
         qubit_frequencies = {

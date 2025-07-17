@@ -249,7 +249,7 @@ def list_history_steps():
         return 0
 
 def main_optimization(
-    d=7, rounds=7, n_steps=20, n_shots=100000, p_cnot=1e-3, tri_optimal_schedule=None, 
+    d=7, rounds=7, n_steps=20, n_shots=300000, p_cnot=1e-3, tri_optimal_schedule=None, 
     init_option='random', history_step=None
 ):
     if tri_optimal_schedule is None:

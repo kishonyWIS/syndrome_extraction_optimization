@@ -96,7 +96,7 @@ def get_initial_cnot_schedule_dict(colorcode, tri_optimal_schedule, init_option=
     Args:
         colorcode: The ColorCode instance
         tri_optimal_schedule: The base tri-optimal schedule
-        init_option: One of 'benchmark', 'random', 'uniform_random', or 'history'
+        init_option: One of 'benchmark', 'random', 'uniform_random', 'history', or 'row_based'
         history_step: Step number to load from history file (only used if init_option='history')
     """
     tri_optimal_schedule = [2, 3, 6, 5, 4, 1, 3, 4, 7, 6, 5, 2]
@@ -157,8 +157,53 @@ def get_initial_cnot_schedule_dict(colorcode, tri_optimal_schedule, init_option=
         # Use the same sorted order for all stabilizers (original behavior)
         z_schedules = [z_target_schedule for _ in range(num_z_stabs)]
         x_schedules = [x_target_schedule for _ in range(num_x_stabs)]
+    elif init_option == 'row_based':
+        # Use different offset patterns based on whether stabilizer is in even or odd row
+        # For even rows: [(-4,0), (-2,1), (2,-1), (-2,-1), (2,1), (4,0)]
+        # For odd rows: [(-4,0), (-2,-1), (2,1), (-2,1), (2,-1), (4,0)]
+        
+        # Define the offset patterns
+        even_row_offsets = [(-4,0), (-2,1), (2,-1), (-2,-1), (2,1), (4,0)]
+        odd_row_offsets = [(-4,0), (-2,-1), (2,1), (-2,1), (2,-1), (4,0)]
+        
+        # Standard offset list for reference (used to map to indices 0-5)
+        standard_offsets = [(-2, 1), (2, 1), (4, 0), (2, -1), (-2, -1), (-4, 0)]
+        
+        # Create mapping from new offset patterns to standard indices
+        def map_offsets_to_indices(offset_pattern):
+            """Map offset pattern to standard indices (0-5)"""
+            indices = []
+            for offset in offset_pattern:
+                try:
+                    idx = standard_offsets.index(offset)
+                    indices.append(idx)
+                except ValueError:
+                    # If offset not found, use 0 as fallback
+                    indices.append(0)
+            return indices
+        
+        even_row_indices = map_offsets_to_indices(even_row_offsets)
+        odd_row_indices = map_offsets_to_indices(odd_row_offsets)
+        
+        # Create schedules for Z stabilizers
+        z_schedules = []
+        for stab_idx, anc_qubit in enumerate(colorcode.qubit_groups['anc_Z']):
+            y_coord = anc_qubit['y']
+            if y_coord % 2 == 0:  # Even row
+                z_schedules.append(even_row_indices)
+            else:  # Odd row
+                z_schedules.append(odd_row_indices)
+        
+        # Create schedules for X stabilizers
+        x_schedules = []
+        for stab_idx, anc_qubit in enumerate(colorcode.qubit_groups['anc_X']):
+            y_coord = anc_qubit['y']
+            if y_coord % 2 == 0:  # Even row
+                x_schedules.append(even_row_indices)
+            else:  # Odd row
+                x_schedules.append(odd_row_indices)
     else:
-        raise ValueError(f"Invalid init_option: {init_option}. Must be one of 'benchmark', 'random', 'uniform_random', or 'history'")
+        raise ValueError(f"Invalid init_option: {init_option}. Must be one of 'benchmark', 'random', 'uniform_random', 'history', or 'row_based'")
 
     cnot_schedule_dict = {
         'Z': z_schedules,
@@ -179,12 +224,8 @@ def visualize_stabilizer_schedules(colorcode, stabilizer_type='X', colormap_name
     anc_qubits = colorcode.qubit_groups[f'anc_{stabilizer_type}']
     schedules = colorcode.cnot_schedule[stabilizer_type]
     tanner_graph = colorcode.tanner_graph
-    
-    # Define offsets for X and Z stabilizers
-    if stabilizer_type == 'X':
-        offsets = [(-2, 1), (2, 1), (4, 0), (2, -1), (-2, -1), (-4, 0)]
-    else:  # Z stabilizers
-        offsets = [(-1, 2), (1, 2), (2, 0), (1, -2), (-1, -2), (-2, 0)]
+
+    offsets = [(-2, 1), (2, 1), (4, 0), (2, -1), (-2, -1), (-4, 0)]
 
     for stab_idx, anc_qubit in enumerate(anc_qubits):
         schedule = schedules[stab_idx]
@@ -249,8 +290,8 @@ def list_history_steps():
         return 0
 
 def main_optimization(
-    d=7, rounds=7, n_steps=20, n_shots=300000, p_cnot=1e-3, tri_optimal_schedule=None, 
-    init_option='random', history_step=None
+    d=7, rounds=2, n_steps=100, n_shots=10000, p_cnot=1e-3, tri_optimal_schedule=None, 
+    init_option='benchmark', history_step=None
 ):
     if tri_optimal_schedule is None:
         tri_optimal_schedule = [2, 3, 6, 5, 4, 1, 3, 4, 7, 6, 5, 2]
@@ -265,6 +306,19 @@ def main_optimization(
         # Build ColorCode with current schedule
         colorcode = build_color_code_with_schedule(d, rounds, cnot_schedule_dict, p_cnot)
         circuit = colorcode.circuit
+
+        undetectable_errors = circuit.search_for_undetectable_logical_errors(
+            dont_explore_detection_event_sets_with_size_above=4,
+            dont_explore_edges_with_degree_above=9999,
+            dont_explore_edges_increasing_symptom_degree=False,
+            canonicalize_circuit_errors=False
+        )
+        
+        print(f"Circuit level distance: {len(undetectable_errors)}")
+
+        # calculate graphlike distance
+        graphlike_distance = len(circuit.shortest_graphlike_error())
+        print(f"Graphlike distance: {graphlike_distance}")
 
         # Analyze errors
         error_rate, confidence_interval, qubit_freqs = analyze_circuit_errors(circuit, colorcode, n_shots)
@@ -290,9 +344,17 @@ def main_optimization(
         randomize_stabilizer_cx_order(cnot_schedule_dict, stab_type, stab_idx)
         new_cx_order = cnot_schedule_dict.copy()
         history.append((error_rate, confidence_interval, worst_ancilla, stab_type, stab_idx, new_cx_order))
+
+        # print the mean error rate of the history
+        print(f"Mean error rate of the history: {np.mean([r[0] for r in history])} with confidence interval {np.std([r[0] for r in history])/np.sqrt(len(history))}")
+        
     return history, colorcode
 
 if __name__ == "__main__":
+    # Test the new row-based initialization
+    # test_row_based_initialization()
+    print()
+    
     # Example usage with different initialization options:
     
     # Option 1: Benchmark initialization (tri_optimal_schedule)
@@ -301,7 +363,7 @@ if __name__ == "__main__":
     
     # Option 2: Random initialization (different random order for each stabilizer)
     print("Running with random initialization...")
-    history, colorcode = main_optimization(init_option='random')
+    history, colorcode = main_optimization()
     
     # Option 3: Uniform random initialization (same random order for all X stabilizers, same for all Z stabilizers)
     # print("Running with uniform random initialization...")
@@ -310,6 +372,10 @@ if __name__ == "__main__":
     # Option 4: History initialization (load from step 5)
     # print("Running with history initialization from step 5...")
     # history, colorcode = main_optimization(init_option='history', history_step=5)
+    
+    # Option 5: Row-based initialization (different patterns for even/odd rows)
+    # print("Running with row-based initialization...")
+    # history, colorcode = main_optimization(init_option='row_based')
     
     # Helper: List available history steps
     # list_history_steps()

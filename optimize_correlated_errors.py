@@ -185,7 +185,7 @@ class CorrelatedErrorOptimizer:
                     involved_plaquettes.append(ancilla_name)
         return list(set(involved_plaquettes))
     
-    def modify_correlated_error(self, ancilla_name: str, current_offset_sets: List[Set[int]], pair_index: Optional[int] = None) -> List[Set[int]]:
+    def modify_correlated_error(self, ancilla_name: str, current_offset_sets: List[Set[int]], pair_index: Optional[int] = None) -> Tuple[List[Set[int]], Optional[Tuple[Set[int], Set[int]]]]:
         """
         Modify a correlated error pair to act on different qubits.
         
@@ -200,14 +200,18 @@ class CorrelatedErrorOptimizer:
             
         Returns:
         --------
-        list
-            New list of offset sets
+        tuple
+            (new_list_of_offset_sets, change_info)
+            where change_info is (old_offset_set, new_offset_set) if a change was made, None otherwise
         """
         # If no specific pair is specified, choose one randomly
         if pair_index is None:
             pair_index = random.randrange(len(current_offset_sets))
         else:
             pair_index = int(pair_index)  # Ensure it's an int
+        
+        # Store the old offset set for change tracking
+        old_offset_set = current_offset_sets[pair_index].copy()
         
         # Get all currently used offsets
         used_offsets = set()
@@ -233,7 +237,11 @@ class CorrelatedErrorOptimizer:
         new_offset_sets = current_offset_sets.copy()
         new_offset_sets[pair_index] = new_offset_pair
         
-        return new_offset_sets
+        # Return change information if the offset set actually changed
+        if old_offset_set != new_offset_pair:
+            return new_offset_sets, (old_offset_set, new_offset_pair)
+        else:
+            return new_offset_sets, None
     
     def get_error_qubits(self, error_explanation) -> set:
         """
@@ -297,6 +305,7 @@ class CorrelatedErrorOptimizer:
         """
         current_config = initial_config.copy()
         iteration_history = []
+        last_change_info = None  # Track the last change made for visualization
         
         print(f"Starting optimization with {len(current_config)} correlated errors")
         print(f"Max iterations: {max_iterations}")
@@ -369,26 +378,76 @@ class CorrelatedErrorOptimizer:
                 highlight_qubit_marker2='s'
             )
             
-            # Add black lines for correlated errors
-            for ancilla_name, offset_sets in current_config.items():
-                for offset_set in offset_sets:
-                    # Get the two qubit positions for this correlated error
-                    qubit_positions = []
-                    ancilla_info = self.ancilla_qubits[ancilla_name]
+            # Draw correlated error edges with change highlighting
+            if last_change_info is not None:
+                changed_ancilla, (old_set, new_set) = last_change_info
+                
+                # Draw all edges in normal black first
+                for ancilla_name, offset_sets in current_config.items():
+                    for offset_set in offset_sets:
+                        # Get the two qubit positions for this correlated error
+                        qubit_positions = []
+                        ancilla_info = self.ancilla_qubits[ancilla_name]
+                        ancilla_x, ancilla_y = ancilla_info['x'], ancilla_info['y']
+                        
+                        for offset_idx in offset_set:
+                            if 0 <= offset_idx < 6:
+                                dx, dy = self.offsets[offset_idx]
+                                data_x = ancilla_x + dx
+                                data_y = ancilla_y + dy
+                                qubit_positions.append((data_x, data_y))
+                        
+                        # Draw line between the two qubits if we have both positions
+                        if len(qubit_positions) == 2:
+                            x_coords = [qubit_positions[0][0], qubit_positions[1][0]]
+                            y_coords = [qubit_positions[0][1], qubit_positions[1][1]]
+                            
+                            # Check if this is the new edge (thick black)
+                            if ancilla_name == changed_ancilla and offset_set == new_set:
+                                ax.plot(x_coords, y_coords, 'cyan', linewidth=4, alpha=0.9)
+                            else:
+                                ax.plot(x_coords, y_coords, 'k-', linewidth=2, alpha=0.7)
+                
+                # Draw the removed edge in grey dotted line
+                if changed_ancilla in self.ancilla_qubits:
+                    ancilla_info = self.ancilla_qubits[changed_ancilla]
                     ancilla_x, ancilla_y = ancilla_info['x'], ancilla_info['y']
                     
-                    for offset_idx in offset_set:
+                    qubit_positions = []
+                    for offset_idx in old_set:
                         if 0 <= offset_idx < 6:
                             dx, dy = self.offsets[offset_idx]
                             data_x = ancilla_x + dx
                             data_y = ancilla_y + dy
                             qubit_positions.append((data_x, data_y))
                     
-                    # Draw line between the two qubits if we have both positions
                     if len(qubit_positions) == 2:
                         x_coords = [qubit_positions[0][0], qubit_positions[1][0]]
                         y_coords = [qubit_positions[0][1], qubit_positions[1][1]]
-                        ax.plot(x_coords, y_coords, 'k-', linewidth=2, alpha=0.7)
+                        ax.plot(x_coords, y_coords, 'cyan', linewidth=4, alpha=0.5, linestyle=':')
+                
+                print(f"Visualization: 1 removed edge (dotted grey), 1 new edge (thick black)")
+            else:
+                # First iteration - draw all edges in normal black
+                for ancilla_name, offset_sets in current_config.items():
+                    for offset_set in offset_sets:
+                        # Get the two qubit positions for this correlated error
+                        qubit_positions = []
+                        ancilla_info = self.ancilla_qubits[ancilla_name]
+                        ancilla_x, ancilla_y = ancilla_info['x'], ancilla_info['y']
+                        
+                        for offset_idx in offset_set:
+                            if 0 <= offset_idx < 6:
+                                dx, dy = self.offsets[offset_idx]
+                                data_x = ancilla_x + dx
+                                data_y = ancilla_y + dy
+                                qubit_positions.append((data_x, data_y))
+                        
+                        # Draw line between the two qubits if we have both positions
+                        if len(qubit_positions) == 2:
+                            x_coords = [qubit_positions[0][0], qubit_positions[1][0]]
+                            y_coords = [qubit_positions[0][1], qubit_positions[1][1]]
+                            ax.plot(x_coords, y_coords, 'k-', linewidth=2, alpha=0.7)
             
             ax.set_title(f'Iteration {iteration + 1} - Correlated Errors and Error Patterns, Distance: {len(undetectable_errors)}')
             plt.tight_layout()
@@ -434,12 +493,19 @@ class CorrelatedErrorOptimizer:
             
             # Modify the correlated error in the chosen plaquette
             current_offset_sets = current_config[chosen_plaquette]  # List of offset sets
-            new_offset_sets = self.modify_correlated_error(chosen_plaquette, current_offset_sets)
+            new_offset_sets, change_info = self.modify_correlated_error(chosen_plaquette, current_offset_sets)
             
             print(f"Modifying {chosen_plaquette}: {current_offset_sets} -> {new_offset_sets}")
+            if change_info:
+                old_set, new_set = change_info
+                print(f"  Change: {old_set} -> {new_set}")
             
             # Update configuration
             current_config[chosen_plaquette] = new_offset_sets
+            
+            # Store change info for visualization
+            if change_info:
+                last_change_info = (chosen_plaquette, change_info)
 
             # # overwrite by totally randomizing all plaquettes by calling generate_random_configuration
             # current_config = self.generate_random_configuration(pairs_per_plaquette=1)
@@ -456,12 +522,13 @@ def main():
     """Main function to run the optimization."""
     
     # Parameters
-    d = 11
+    d = 7
     circuit_type = "tri"
-    max_iterations = 50
+    max_iterations = 25
     p_correlated = 0.1
     p_bitflip = 0.05
     seed = 42
+    pairs_per_plaquette = 1  # Can be increased for more complex patterns
     
     print("=== Correlated Error Optimization ===")
     print(f"Code distance: {d}")
@@ -474,7 +541,6 @@ def main():
     optimizer = CorrelatedErrorOptimizer(d, circuit_type, seed)
     
     # Generate initial random configuration
-    pairs_per_plaquette = 1  # Can be increased for more complex patterns
     print(f"Generating initial random configuration with {pairs_per_plaquette} pairs per plaquette...")
     initial_config = optimizer.generate_random_configuration(pairs_per_plaquette)
     

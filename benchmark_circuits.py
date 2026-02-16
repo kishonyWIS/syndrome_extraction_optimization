@@ -1202,15 +1202,15 @@ def main():
     """Run the full benchmark comparison."""
     
     # Configuration
-    distances = [9]#[3, 5, 7, 9, 11]
+    distances = [3,5]#[3, 5, 7, 9, 11]
     error_rates = [0.005]  # 4 key points
     n_shots = 10_000_000  # Max shots
     max_errors = 300  # Stop early after 300 errors
     max_time_per_config = 300
     rounds = None  # Constant number of rounds (set to None for rounds = d)
     decoders = ['tesseract']  # Tesseract + Hyperion (MWPF)
-    circuit_types = ['midout']# ['optimized_parallel', 'tri_optimal', 'midout', 'superdense']
-    save_path = 'results/benchmark_results_0.005_error_rate_d_rounds_midout_d9.pkl'
+    circuit_types = ['optimized_parallel', 'tri_optimal', 'midout', 'superdense']
+    save_path = 'results/benchmark_results_0.005_temp_blah.pkl'
     
     # Load zero-collision schedule (for parallelized circuit)
     try:

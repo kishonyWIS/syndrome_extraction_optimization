@@ -233,41 +233,38 @@ def build_optimized_circuit(d: int, rounds: int, p_cnot: float,
     return add_depolarize2_after_cnot(colorcode.circuit, p_cnot)
 
 
+# Schedule config for tri_optimal: same 6-step Z order for all colors (from ColorCode built-in).
+# X uses the same pattern at steps 7-12. Used with build_parallel_circuit for tri_optimal circuits.
+TRI_OPTIMAL_SCHEDULE_CONFIG: Dict = {
+    'r_schedule': [2, 3, 6, 5, 4, 1],
+    'g_schedule': [2, 3, 6, 5, 4, 1],
+    'b_schedule': [2, 3, 6, 5, 4, 1],
+}
+
+
 def build_tri_optimal_circuit(d: int, rounds: int, p_cnot: float) -> stim.Circuit:
     """
-    Build circuit with tri_optimal schedule.
-    
-    Args:
-        d: Code distance
-        rounds: Number of syndrome extraction rounds
-        p_cnot: CNOT error probability
-        
-    Returns:
-        stim.Circuit with DEPOLARIZE2 after each CNOT
+    Build circuit with tri_optimal schedule using the same parallel construction
+    as build_parallel_circuit (12 parallel CX steps per round).
     """
-    # Build ColorCode with tri_optimal schedule (no noise initially)
-    # Use exclude_non_essential_pauli_detectors=False to include X detectors
-    colorcode = ColorCode(d=d, rounds=rounds, cnot_schedule="tri_optimal", 
-                         p_cnot=0, exclude_non_essential_pauli_detectors=False)
-    
-    # Add DEPOLARIZE2 after each CNOT
-    return add_depolarize2_after_cnot(colorcode.circuit, p_cnot)
+    return build_parallel_circuit(d, rounds, p_cnot, TRI_OPTIMAL_SCHEDULE_CONFIG)
 
 
-def build_optimized_parallel_circuit(d: int, rounds: int, p_cnot: float,
-                                     schedule_config: Dict) -> stim.Circuit:
+def build_parallel_circuit(d: int, rounds: int, p_cnot: float,
+                           schedule_config: Dict) -> stim.Circuit:
     """
-    Build a PARALLELIZED circuit with optimized zero-collision schedule.
+    Build a parallelized color-code circuit from a schedule config.
     
-    This circuit has 12 parallel CX steps per round (6 for Z, 6 for X),
-    where all CNOTs at each time step execute simultaneously.
+    Uses manual construction with 12 parallel CX steps per round (6 for Z, 6 for X).
+    Suitable for both tri_optimal (pass TRI_OPTIMAL_SCHEDULE_CONFIG) and
+    optimized zero-collision schedules (pass config from load_zero_collision_schedule).
     
     Args:
         d: Code distance
         rounds: Number of syndrome extraction rounds
         p_cnot: CNOT error probability
         schedule_config: Dict with 'r_schedule', 'g_schedule', 'b_schedule' keys
-                        (6-element Z schedules; X schedules use same pattern shifted by +6)
+                        (each a 6-element list: Z step 1-6 per data position; X uses same at 7-12)
         
     Returns:
         stim.Circuit with parallel CNOTs and DEPOLARIZE2 after each CX step
@@ -277,8 +274,7 @@ def build_optimized_parallel_circuit(d: int, rounds: int, p_cnot: float,
                          exclude_non_essential_pauli_detectors=True)
     
     tanner_graph = colorcode.tanner_graph
-    anc_Z_qubits = colorcode.qubit_groups['anc_Z']
-    anc_X_qubits = colorcode.qubit_groups['anc_X']
+    anc_Z_qubits = colorcode.qubit_groups['anc_Z']  # reused for X in steps 7-12 after M+RX
     data_qubits = colorcode.qubit_groups['data']
     
     # Canonical offsets for hexagonal plaquettes
@@ -317,65 +313,77 @@ def build_optimized_parallel_circuit(d: int, rounds: int, p_cnot: float,
                 # Z stabilizer: CX data -> ancilla
                 cnots_by_timestep[timestep].append((data_qid, anc_qid))
     
-    # X stabilizers (time steps 7-12)
-    for anc_qubit in anc_X_qubits:
+    # X stabilizers (time steps 7-12): reuse same ancillas as Z (same plaquette = same support)
+    for anc_qubit in anc_Z_qubits:
         color = anc_qubit['color']
         schedule = schedules_by_color[color]
         anc_qid = anc_qubit.index
         for pos_idx, timestep in enumerate(schedule):
             data_qid = get_data_qid(anc_qubit, pos_idx)
             if data_qid is not None:
-                # X stabilizer: CX ancilla -> data (at timestep + 6)
+                # X stabilizer: CX ancilla -> data (at timestep + 6); same qubit as Z ancilla
                 cnots_by_timestep[timestep + 6].append((anc_qid, data_qid))
     
-    # Qubit IDs
+    # Qubit IDs: only data + Z ancillas (X ancillas are reused from Z ancillas)
     data_qids = [dq['qid'] for dq in data_qubits]
-    anc_Z_qids = [anc['qid'] for anc in anc_Z_qubits]
-    anc_X_qids = [anc['qid'] for anc in anc_X_qubits]
-    num_anc_Z = len(anc_Z_qids)
-    num_anc_X = len(anc_X_qids)
-    num_anc = num_anc_Z + num_anc_X
+    anc_qids = [anc['qid'] for anc in anc_Z_qubits]
+    num_anc = len(anc_qids)
+    used_qids = set(data_qids) | set(anc_qids)
     
     # Build the stim circuit
     circuit = stim.Circuit()
     
-    # Add QUBIT_COORDS
+    # Add QUBIT_COORDS only for qubits used in the circuit
     for v in tanner_graph.vs:
-        circuit.append("QUBIT_COORDS", [v.index], [v['x'], v['y']])
+        if v.index in used_qids:
+            circuit.append("QUBIT_COORDS", [v.index], [v['x'], v['y']])
     
-    # Initialize data qubits and ancillas
-    circuit.append("R", data_qids + anc_Z_qids)
-    circuit.append("RX", anc_X_qids)
+    # Initialize data qubits and ancillas (|0⟩ for data and Z ancillas)
+    circuit.append("R", data_qids + anc_qids)
     circuit.append("TICK")
     
     def add_syndrome_round(circuit, add_noise=True):
-        """Add one syndrome extraction round (12 parallel CX steps + measurements)."""
-        for t in range(1, 13):
+        """One round: steps 1-6 (Z), M + RX on ancillas, steps 7-12 (X), MX + R on ancillas."""
+        # Steps 1-6: Z stabilizer CNOTs (data -> ancilla)
+        for t in range(1, 7):
             cx_targets = []
             for ctrl, targ in cnots_by_timestep[t]:
                 cx_targets.extend([ctrl, targ])
             if cx_targets:
                 circuit.append("CX", cx_targets)
                 if add_noise and p_cnot > 0:
-                    # Add DEPOLARIZE2 after each CX pair
                     for ctrl, targ in cnots_by_timestep[t]:
                         circuit.append("DEPOLARIZE2", [ctrl, targ], p_cnot)
             circuit.append("TICK")
-        
-        # Measurements (resetting)
-        circuit.append("MR", anc_Z_qids)
-        circuit.append("MRX", anc_X_qids)
+        # Measure Z syndrome, reset ancillas to |+⟩ for X measurement
+        circuit.append("M", anc_qids)
+        circuit.append("RX", anc_qids)
+        circuit.append("TICK")
+        # Steps 7-12: X stabilizer CNOTs (ancilla -> data), same ancilla qubits
+        for t in range(7, 13):
+            cx_targets = []
+            for ctrl, targ in cnots_by_timestep[t]:
+                cx_targets.extend([ctrl, targ])
+            if cx_targets:
+                circuit.append("CX", cx_targets)
+                if add_noise and p_cnot > 0:
+                    for ctrl, targ in cnots_by_timestep[t]:
+                        circuit.append("DEPOLARIZE2", [ctrl, targ], p_cnot)
+            circuit.append("TICK")
+        # Measure X syndrome, reset ancillas to |0⟩ for next round
+        circuit.append("MX", anc_qids)
+        circuit.append("R", anc_qids)
         circuit.append("TICK")
     
     # First round
     add_syndrome_round(circuit)
     
-    # Add detectors for first round
+    # Add detectors for first round (per round: M then MX → 2*num_anc records; Z at -2*num_anc+j, X at -num_anc+j)
     # Z-type: deterministic (data starts in |0⟩)
     for j, anc in enumerate(anc_Z_qubits):
         color_val = 0 if anc['color'] == 'r' else (1 if anc['color'] == 'g' else 2)
         coords = (anc['x'], anc['y'], 0, 2, color_val)
-        circuit.append("DETECTOR", [stim.target_rec(-num_anc + j)], coords)
+        circuit.append("DETECTOR", [stim.target_rec(-2*num_anc + j)], coords)
     # X-type: NOT deterministic in first round (random outcomes), no detector
     
     circuit.append("SHIFT_COORDS", [], [0, 0, 1])
@@ -384,22 +392,22 @@ def build_optimized_parallel_circuit(d: int, rounds: int, p_cnot: float,
     for round_idx in range(1, rounds):
         add_syndrome_round(circuit)
         
-        # Z-type detectors comparing with previous round
+        # Z-type detectors comparing with previous round (current Z at -2*num_anc+j, previous at -4*num_anc+j)
         for j, anc in enumerate(anc_Z_qubits):
             color_val = 0 if anc['color'] == 'r' else (1 if anc['color'] == 'g' else 2)
             coords = (anc['x'], anc['y'], 0, 2, color_val)
             circuit.append("DETECTOR", [
-                stim.target_rec(-num_anc + j),
-                stim.target_rec(-2*num_anc + j)
+                stim.target_rec(-2*num_anc + j),
+                stim.target_rec(-4*num_anc + j)
             ], coords)
         
-        # X-type detectors comparing with previous round (starting from round 2)
-        for j, anc in enumerate(anc_X_qubits):
+        # X-type detectors (same ancilla qubits; current X at -num_anc+j, previous at -3*num_anc+j)
+        for j, anc in enumerate(anc_Z_qubits):
             color_val = 0 if anc['color'] == 'r' else (1 if anc['color'] == 'g' else 2)
             coords = (anc['x'], anc['y'], 0, 4, color_val)  # 4 = X-type basis
             circuit.append("DETECTOR", [
-                stim.target_rec(-num_anc + num_anc_Z + j),
-                stim.target_rec(-2*num_anc + num_anc_Z + j)
+                stim.target_rec(-num_anc + j),
+                stim.target_rec(-3*num_anc + j)
             ], coords)
         
         circuit.append("SHIFT_COORDS", [], [0, 0, 1])
@@ -407,23 +415,23 @@ def build_optimized_parallel_circuit(d: int, rounds: int, p_cnot: float,
     # Final data measurement
     circuit.append("M", data_qids)
     
-    # Final detectors comparing data measurements with last round's ancilla measurements
+    # Final detectors comparing data measurements with last round's Z ancilla measurements
     for j, anc in enumerate(anc_Z_qubits):
         color_val = 0 if anc['color'] == 'r' else (1 if anc['color'] == 'g' else 2)
         coords = (anc['x'], anc['y'], 0, 2, color_val)
         
-        # Get data qubits connected to this Z ancilla
+        # Get data qubits connected to this ancilla (same for Z and X)
         connected_data = []
         for pos_idx in range(6):
             data_qid = get_data_qid(anc, pos_idx)
             if data_qid is not None:
                 connected_data.append(data_qid)
         
-        # Build detector targets: data measurements + last ancilla measurement
+        # Build detector targets: data measurements + last round's Z measurement (at -2*num_anc+j in last round)
         targets = []
         for dq in connected_data:
             targets.append(stim.target_rec(-len(data_qids) + data_qids.index(dq)))
-        targets.append(stim.target_rec(-len(data_qids) - num_anc + j))
+        targets.append(stim.target_rec(-len(data_qids) - 2*num_anc + j))
         
         circuit.append("DETECTOR", targets, coords)
     
@@ -610,7 +618,7 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
                     elif circuit_type == 'optimized_parallel':
                         if config.optimized_schedule is None:
                             continue
-                        test_circuit = build_optimized_parallel_circuit(d, rounds, 0.001, config.optimized_schedule)
+                        test_circuit = build_parallel_circuit(d, rounds, 0.001, config.optimized_schedule)
                     elif circuit_type == 'tri_optimal':
                         test_circuit = build_tri_optimal_circuit(d, rounds, 0.001)
                     elif circuit_type in ['midout', 'superdense']:
@@ -639,7 +647,7 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
                             if config.optimized_schedule is None:
                                 print(f"      Skipping (no schedule)")
                                 continue
-                            circuit = build_optimized_parallel_circuit(d, rounds, p_cnot, config.optimized_schedule)
+                            circuit = build_parallel_circuit(d, rounds, p_cnot, config.optimized_schedule)
                         elif circuit_type == 'tri_optimal':
                             circuit = build_tri_optimal_circuit(d, rounds, p_cnot)
                         elif circuit_type in ['midout', 'superdense']:
@@ -765,7 +773,7 @@ def generate_circuit_links_html(d: int, rounds: int, p_cnot: float,
             print(f"Error building optimized circuit: {e}")
         
         try:
-            circuits['Optimized (parallel)'] = build_optimized_parallel_circuit(d, rounds, p_cnot, optimized_schedule)
+            circuits['Optimized (parallel)'] = build_parallel_circuit(d, rounds, p_cnot, optimized_schedule)
         except Exception as e:
             print(f"Error building optimized_parallel circuit: {e}")
     

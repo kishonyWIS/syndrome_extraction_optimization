@@ -1,0 +1,50 @@
+QUBIT_COORDS(0, 0) 0
+QUBIT_COORDS(1, 0) 1
+QUBIT_COORDS(2, 0) 2
+QUBIT_COORDS(3, 0) 3
+QUBIT_COORDS(4, 0) 4
+QUBIT_COORDS(5, 0) 5
+QUBIT_COORDS(6, 0) 6
+QUBIT_COORDS(7, 0) 7
+QUBIT_COORDS(8, 0) 8
+QUBIT_COORDS(9, 0) 9
+QUBIT_COORDS(10, 0) 10
+QUBIT_COORDS(11, 0) 11
+QUBIT_COORDS(12, 0) 12
+MPP Z0
+OBSERVABLE_INCLUDE(0) rec[-1]
+MPP Z0*Z1 Z1*Z2 Z2*Z3 Z3*Z4 Z4*Z5 Z5*Z6 Z6*Z7 Z7*Z8 Z8*Z9 Z9*Z10 Z10*Z11 Z11*Z12
+TICK
+REPEAT 52 {
+    DEPOLARIZE1(0.01) 0 1 2 3 4 5 6 7 8 9 10 11 12
+    MPP(0.01) Z0*Z1 Z1*Z2 Z2*Z3 Z3*Z4 Z4*Z5 Z5*Z6 Z6*Z7 Z7*Z8 Z8*Z9 Z9*Z10 Z10*Z11 Z11*Z12
+    DETECTOR(0.5, 0, 0, 3) rec[-24] rec[-12]
+    DETECTOR(1.5, 0, 0, 3) rec[-23] rec[-11]
+    DETECTOR(2.5, 0, 0, 3) rec[-22] rec[-10]
+    DETECTOR(3.5, 0, 0, 3) rec[-21] rec[-9]
+    DETECTOR(4.5, 0, 0, 3) rec[-20] rec[-8]
+    DETECTOR(5.5, 0, 0, 3) rec[-19] rec[-7]
+    DETECTOR(6.5, 0, 0, 3) rec[-18] rec[-6]
+    DETECTOR(7.5, 0, 0, 3) rec[-17] rec[-5]
+    DETECTOR(8.5, 0, 0, 3) rec[-16] rec[-4]
+    DETECTOR(9.5, 0, 0, 3) rec[-15] rec[-3]
+    DETECTOR(10.5, 0, 0, 3) rec[-14] rec[-2]
+    DETECTOR(11.5, 0, 0, 3) rec[-13] rec[-1]
+    SHIFT_COORDS(0, 0, 1)
+    TICK
+}
+MPP Z0*Z1 Z1*Z2 Z2*Z3 Z3*Z4 Z4*Z5 Z5*Z6 Z6*Z7 Z7*Z8 Z8*Z9 Z9*Z10 Z10*Z11 Z11*Z12
+DETECTOR(0.5, 0, 0, 3) rec[-24] rec[-12]
+DETECTOR(1.5, 0, 0, 3) rec[-23] rec[-11]
+DETECTOR(2.5, 0, 0, 3) rec[-22] rec[-10]
+DETECTOR(3.5, 0, 0, 3) rec[-21] rec[-9]
+DETECTOR(4.5, 0, 0, 3) rec[-20] rec[-8]
+DETECTOR(5.5, 0, 0, 3) rec[-19] rec[-7]
+DETECTOR(6.5, 0, 0, 3) rec[-18] rec[-6]
+DETECTOR(7.5, 0, 0, 3) rec[-17] rec[-5]
+DETECTOR(8.5, 0, 0, 3) rec[-16] rec[-4]
+DETECTOR(9.5, 0, 0, 3) rec[-15] rec[-3]
+DETECTOR(10.5, 0, 0, 3) rec[-14] rec[-2]
+DETECTOR(11.5, 0, 0, 3) rec[-13] rec[-1]
+MPP Z0
+OBSERVABLE_INCLUDE(0) rec[-1]

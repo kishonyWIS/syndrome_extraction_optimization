@@ -1,0 +1,13 @@
+shots,errors,discards,seconds,decoder,strong_id,json_metadata,custom_counts
+2289849,500,0,0,VLSD-32,mxyz_si_res30.0001,"{""d"":3,""p"":0.0001,""r"":3,""c"":""XYZ Colour Code"",""q"":10,""SELSD calls"":0}",
+76808,509,0,0,VLSD-32,mxyz_si_res30.001,"{""d"":3,""p"":0.001,""r"":3,""c"":""XYZ Colour Code"",""q"":10,""SELSD calls"":2}",
+10000000,153,0,0,VLSD-32,mxyz_si_res50.0001,"{""d"":5,""p"":0.0001,""r"":5,""c"":""XYZ Colour Code"",""q"":28,""SELSD calls"":410}",
+148256,500,0,0,VLSD-32,mxyz_si_res50.001,"{""d"":5,""p"":0.001,""r"":5,""c"":""XYZ Colour Code"",""q"":28,""SELSD calls"":704}",
+10000000,14,0,0,VLSD-32,mxyz_si_res70.0001,"{""d"":7,""p"":0.0001,""r"":7,""c"":""XYZ Colour Code"",""q"":55,""SELSD calls"":558}",
+379861,500,0,0,VLSD-32,mxyz_si_res70.001,"{""d"":7,""p"":0.001,""r"":7,""c"":""XYZ Colour Code"",""q"":55,""SELSD calls"":5156}",
+10000000,0,0,0,VLSD-32,mxyz_si_res90.0001,"{""d"":9,""p"":0.0001,""r"":9,""c"":""XYZ Colour Code"",""q"":91,""SELSD calls"":1031}",
+1679304,780,0,0,VLSD-32,mxyz_si_res90.001,"{""d"":9,""p"":0.001,""r"":9,""c"":""XYZ Colour Code"",""q"":91,""SELSD calls"":48770}",
+17983390,3,0,0,VLSD-32,mxyz_si_res110.0001,"{""d"":11,""p"":0.0001,""r"":11,""c"":""XYZ Colour Code"",""q"":136,""SELSD calls"":2800}",
+932660,319,0,0,VLSD-32,mxyz_si_res110.001,"{""d"":11,""p"":0.001,""r"":11,""c"":""XYZ Colour Code"",""q"":136,""SELSD calls"":52597}",
+2513050,0,0,0,VLSD-32,mxyz_si_res130.0001,"{""d"":13,""p"":0.0001,""r"":13,""c"":""XYZ Colour Code"",""q"":190,""SELSD calls"":416}",
+142260,21,0,0,VLSD-32,mxyz_si_res130.001,"{""d"":13,""p"":0.001,""r"":13,""c"":""XYZ Colour Code"",""q"":190,""SELSD calls"":12124}",

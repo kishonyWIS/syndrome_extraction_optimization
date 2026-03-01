@@ -136,6 +136,69 @@ def add_depolarize2_after_cnot(circuit: stim.Circuit, p_cnot: float) -> stim.Cir
     return new_circuit
 
 
+# Measurement opcodes that tqec uniform_depolarizing expects with no gate args (assert len(args)==0).
+_TQEC_MEASURE_OPS = frozenset({"M", "MX", "MY", "MZ", "MPP"})
+
+
+def _rewrite_mr_mrx_for_tqec(circuit: stim.Circuit) -> stim.Circuit:
+    """Expand MR -> M, TICK, R and MRX -> MX, TICK, RX so tqec uniform_depolarizing has rules for them.
+    Also strips gate args from measurement instructions so tqec's NoiseRule (assert len(args)==0) passes."""
+    out = stim.Circuit()
+    for instruction in circuit:
+        if instruction.name == "REPEAT":
+            inner = _rewrite_mr_mrx_for_tqec(instruction.body_copy())
+            out += inner * instruction.repeat_count
+        elif instruction.name == "MR":
+            targets = instruction.targets_copy()
+            qubits = [t.value for t in targets if t.is_qubit_target]
+            out.append("M", qubits)
+            out.append("TICK")
+            out.append("R", qubits)
+        elif instruction.name == "MRX":
+            targets = instruction.targets_copy()
+            qubits = [t.value for t in targets if t.is_qubit_target]
+            out.append("MX", qubits)
+            out.append("TICK")
+            out.append("RX", qubits)
+        elif instruction.name in ("MRY", "MRZ"):
+            targets = instruction.targets_copy()
+            qubits = [t.value for t in targets if t.is_qubit_target]
+            out.append(instruction.name[0] + instruction.name[2], qubits)  # MY, MZ
+            out.append("TICK")
+            out.append("R" + instruction.name[1], qubits)  # RY, RZ
+        else:
+            # tqec uniform_depolarizing asserts len(args)==0 for measure ops; strip args if present
+            if instruction.name in _TQEC_MEASURE_OPS and instruction.gate_args_copy():
+                out.append(instruction.name, instruction.targets_copy())
+            else:
+                out.append(instruction)
+    return out
+
+
+def apply_noise(circuit: stim.Circuit, p_cnot: float, noise_model: str) -> stim.Circuit:
+    """
+    Apply a noise model to a noiseless circuit.
+
+    Args:
+        circuit: Noiseless stim circuit
+        p_cnot: Noise strength (probability parameter)
+        noise_model: One of:
+            - 'depolarize2_after_cnot': DEPOLARIZE2(p) after each CNOT only
+            - 'tqec_uniform_depolarizing': tqec NoiseModel.uniform_depolarizing(p) — idle,
+              1q/2q Clifford, measure flips, reset errors
+
+    Returns:
+        Noisy circuit
+    """
+    if noise_model == 'depolarize2_after_cnot':
+        return add_depolarize2_after_cnot(circuit, p_cnot)
+    if noise_model == 'tqec_uniform_depolarizing':
+        from tqec import NoiseModel
+        circuit = _rewrite_mr_mrx_for_tqec(circuit)
+        return NoiseModel.uniform_depolarizing(p_cnot).noisy_circuit(circuit)
+    raise ValueError(f"Unknown noise_model: {noise_model!r}. Use 'depolarize2_after_cnot' or 'tqec_uniform_depolarizing'.")
+
+
 def generate_gidney_circuit(circuit_type: str, d: int, rounds: int, p_cnot: float) -> stim.Circuit:
     """
     Generate Gidney's circuit using code from Zenodo with custom parameters.
@@ -144,10 +207,10 @@ def generate_gidney_circuit(circuit_type: str, d: int, rounds: int, p_cnot: floa
         circuit_type: 'midout' or 'superdense'
         d: Code distance (base_width for midout, base_data_width for superdense)
         rounds: Number of syndrome extraction rounds
-        p_cnot: CNOT error probability for noise model
+        p_cnot: Unused (kept for API); apply noise via apply_noise(..., noise_model).
         
     Returns:
-        Circuit with DEPOLARIZE2 after each CNOT
+        Noiseless circuit; caller applies noise via apply_noise(..., noise_model).
     """
     import sys
     if 'gidney_circuits/src' not in sys.path:
@@ -174,8 +237,8 @@ def generate_gidney_circuit(circuit_type: str, d: int, rounds: int, p_cnot: floa
     else:
         raise ValueError(f"Unknown circuit type: {circuit_type}")
     
-    # Add DEPOLARIZE2 after each CNOT
-    return add_depolarize2_after_cnot(circuit, p_cnot)
+    # Noiseless; caller applies noise via apply_noise(..., noise_model)
+    return circuit
 
 
 def build_optimized_circuit(d: int, rounds: int, p_cnot: float, 
@@ -191,7 +254,7 @@ def build_optimized_circuit(d: int, rounds: int, p_cnot: float,
                         (6-element Z schedules; X schedules are derived by adding 6)
         
     Returns:
-        stim.Circuit with DEPOLARIZE2 after each CNOT
+        Noiseless stim.Circuit; caller applies noise via apply_noise(..., noise_model).
     """
     # Edge schedules (fixed, Z part only - same as in exhaustive_schedule_search.py)
     edge_schedules_z = {
@@ -229,8 +292,8 @@ def build_optimized_circuit(d: int, rounds: int, p_cnot: float,
     colorcode = ColorCode(d=d, rounds=rounds, cnot_schedule=cnot_dict, 
                          p_cnot=0, exclude_non_essential_pauli_detectors=False)
     
-    # Add DEPOLARIZE2 after each CNOT
-    return add_depolarize2_after_cnot(colorcode.circuit, p_cnot)
+    # Noiseless; caller applies noise via apply_noise(..., noise_model)
+    return colorcode.circuit
 
 
 # Schedule config for tri_optimal: same 6-step Z order for all colors (from ColorCode built-in).
@@ -267,7 +330,7 @@ def build_parallel_circuit(d: int, rounds: int, p_cnot: float,
                         (each a 6-element list: Z step 1-6 per data position; X uses same at 7-12)
         
     Returns:
-        stim.Circuit with parallel CNOTs and DEPOLARIZE2 after each CX step
+        Noiseless stim.Circuit; caller applies noise via apply_noise(..., noise_model).
     """
     # Get ColorCode structure for qubit layout
     colorcode = ColorCode(d=d, rounds=1, cnot_schedule="tri_optimal", p_cnot=0,
@@ -342,8 +405,8 @@ def build_parallel_circuit(d: int, rounds: int, p_cnot: float,
     circuit.append("R", data_qids + anc_qids)
     circuit.append("TICK")
     
-    def add_syndrome_round(circuit, add_noise=True):
-        """One round: steps 1-6 (Z), M + RX on ancillas, steps 7-12 (X), MX + R on ancillas."""
+    def add_syndrome_round(circuit):
+        """One round: steps 1-6 (Z), M + RX on ancillas, steps 7-12 (X), MX + R on ancillas. No noise (added later)."""
         # Steps 1-6: Z stabilizer CNOTs (data -> ancilla)
         for t in range(1, 7):
             cx_targets = []
@@ -351,12 +414,10 @@ def build_parallel_circuit(d: int, rounds: int, p_cnot: float,
                 cx_targets.extend([ctrl, targ])
             if cx_targets:
                 circuit.append("CX", cx_targets)
-                if add_noise and p_cnot > 0:
-                    for ctrl, targ in cnots_by_timestep[t]:
-                        circuit.append("DEPOLARIZE2", [ctrl, targ], p_cnot)
             circuit.append("TICK")
-        # Measure Z syndrome, reset ancillas to |+⟩ for X measurement
+        # Measure Z syndrome, reset ancillas to |+⟩ for X measurement (TICKs so tqec sees separate moments)
         circuit.append("M", anc_qids)
+        circuit.append("TICK")
         circuit.append("RX", anc_qids)
         circuit.append("TICK")
         # Steps 7-12: X stabilizer CNOTs (ancilla -> data), same ancilla qubits
@@ -366,12 +427,10 @@ def build_parallel_circuit(d: int, rounds: int, p_cnot: float,
                 cx_targets.extend([ctrl, targ])
             if cx_targets:
                 circuit.append("CX", cx_targets)
-                if add_noise and p_cnot > 0:
-                    for ctrl, targ in cnots_by_timestep[t]:
-                        circuit.append("DEPOLARIZE2", [ctrl, targ], p_cnot)
             circuit.append("TICK")
-        # Measure X syndrome, reset ancillas to |0⟩ for next round
+        # Measure X syndrome, reset ancillas to |0⟩ for next round (TICKs for tqec)
         circuit.append("MX", anc_qids)
+        circuit.append("TICK")
         circuit.append("R", anc_qids)
         circuit.append("TICK")
     
@@ -440,6 +499,7 @@ def build_parallel_circuit(d: int, rounds: int, p_cnot: float,
     obs_targets = [stim.target_rec(-len(data_qids) + data_qids.index(qid)) for qid in top_row_qids]
     circuit.append("OBSERVABLE_INCLUDE", obs_targets, 0)
     
+    # Noiseless; caller applies noise via apply_noise(..., noise_model)
     return circuit
 
 
@@ -456,6 +516,7 @@ class BenchmarkConfig:
     decoders: List[str]  # 'tesseract' or 'hyperion'
     circuit_types: List[str]  # 'optimized', 'optimized_parallel', 'tri_optimal', 'midout', 'superdense'
     optimized_schedule: Optional[Dict] = None
+    noise_model: str = 'depolarize2_after_cnot'  # or 'tqec_uniform_depolarizing'
     max_errors: Optional[int] = None  # Stop early after this many errors
     max_time_per_config: Optional[float] = None  # Stop early after this many seconds
     rounds: Optional[int] = None  # Number of syndrome extraction rounds. None = use d (distance-dependent)
@@ -609,7 +670,7 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
             # Compute circuit distance once per (circuit_type, d)
             distance_key = (circuit_type, d)
             if distance_key not in circuit_distances:
-                # Build circuit to compute distance (use any p_cnot)
+                # Build circuit with noise so Stim's search has error channels to explore
                 try:
                     if circuit_type == 'optimized':
                         if config.optimized_schedule is None:
@@ -625,7 +686,8 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
                         test_circuit = generate_gidney_circuit(circuit_type, d, rounds, 0.001)
                     else:
                         continue
-                    
+                    # Apply noise so detector error model has errors; search needs them to find undetectable logical errors
+                    test_circuit = apply_noise(test_circuit, 0.001, config.noise_model)
                     circuit_distances[distance_key] = compute_circuit_distance_stim(test_circuit)
                     print(f"    Circuit-level distance: {circuit_distances[distance_key]}")
                 except Exception as e:
@@ -654,6 +716,7 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
                             circuit = generate_gidney_circuit(circuit_type, d, rounds, p_cnot)
                         else:
                             continue
+                        circuit = apply_noise(circuit, p_cnot, config.noise_model)
                     except Exception as e:
                         print(f"      [{current_config}/{total_configs}] {decoder}, p={p_cnot:.0e}: ERROR building circuit: {e}")
                         continue
@@ -750,7 +813,8 @@ def load_zero_collision_schedule(csv_file: str = 'results/zero_collision_schedul
 
 def generate_circuit_links_html(d: int, rounds: int, p_cnot: float,
                                 optimized_schedule: Optional[Dict] = None,
-                                output_path: str = 'results/circuit_links.html'):
+                                output_path: str = 'results/circuit_links.html',
+                                noise_model: str = 'depolarize2_after_cnot'):
     """
     Generate HTML file with Crumble links for all circuit types.
     
@@ -760,35 +824,42 @@ def generate_circuit_links_html(d: int, rounds: int, p_cnot: float,
         p_cnot: CNOT error probability
         optimized_schedule: Dict with schedule for optimized circuits
         output_path: Path to save HTML file
+        noise_model: 'depolarize2_after_cnot' or 'tqec_uniform_depolarizing'
     """
     import urllib.parse
     
     circuits = {}
     
-    # Build all circuit types
+    def _build_and_noise(build_fn, *args, **kwargs):
+        circ = build_fn(*args, **kwargs)
+        return apply_noise(circ, p_cnot, noise_model)
+
+    # Build all circuit types (noiseless then apply_noise)
     if optimized_schedule:
         try:
-            circuits['Optimized (serialized)'] = build_optimized_circuit(d, rounds, p_cnot, optimized_schedule)
+            circuits['Optimized (serialized)'] = _build_and_noise(build_optimized_circuit, d, rounds, p_cnot, optimized_schedule)
         except Exception as e:
+            import traceback
             print(f"Error building optimized circuit: {e}")
+            traceback.print_exc()
         
         try:
-            circuits['Optimized (parallel)'] = build_parallel_circuit(d, rounds, p_cnot, optimized_schedule)
+            circuits['Optimized (parallel)'] = _build_and_noise(build_parallel_circuit, d, rounds, p_cnot, optimized_schedule)
         except Exception as e:
             print(f"Error building optimized_parallel circuit: {e}")
     
     try:
-        circuits['Tri-Optimal'] = build_tri_optimal_circuit(d, rounds, p_cnot)
+        circuits['Tri-Optimal'] = _build_and_noise(build_tri_optimal_circuit, d, rounds, p_cnot)
     except Exception as e:
         print(f"Error building tri_optimal circuit: {e}")
     
     try:
-        circuits['Midout (Gidney)'] = generate_gidney_circuit('midout', d, rounds, p_cnot)
+        circuits['Midout (Gidney)'] = _build_and_noise(generate_gidney_circuit, 'midout', d, rounds, p_cnot)
     except Exception as e:
         print(f"Error building midout circuit: {e}")
     
     try:
-        circuits['Superdense (Gidney)'] = generate_gidney_circuit('superdense', d, rounds, p_cnot)
+        circuits['Superdense (Gidney)'] = _build_and_noise(generate_gidney_circuit, 'superdense', d, rounds, p_cnot)
     except Exception as e:
         print(f"Error building superdense circuit: {e}")
     
@@ -1210,15 +1281,16 @@ def main():
     """Run the full benchmark comparison."""
     
     # Configuration
-    distances = [3,5]#[3, 5, 7, 9, 11]
-    error_rates = [0.005]  # 4 key points
+    distances = [3,7]#[3, 5, 7, 9, 11]
+    error_rates = [0.001]  # 4 key points
     n_shots = 10_000_000  # Max shots
     max_errors = 300  # Stop early after 300 errors
     max_time_per_config = 300
     rounds = None  # Constant number of rounds (set to None for rounds = d)
     decoders = ['tesseract']  # Tesseract + Hyperion (MWPF)
+    noise_model = 'tqec_uniform_depolarizing'  # 'depolarize2_after_cnot' or 'tqec_uniform_depolarizing'
     circuit_types = ['optimized_parallel', 'tri_optimal', 'midout', 'superdense']
-    save_path = 'results/benchmark_results_0.005_temp_blah.pkl'
+    save_path = 'results/benchmark_results_0.001_temp_blah.pkl'
     
     # Load zero-collision schedule (for parallelized circuit)
     try:
@@ -1239,7 +1311,8 @@ def main():
     generate_circuit_links_html(
         d=5, rounds=rounds if rounds is not None else 5, p_cnot=0.001,
         optimized_schedule=optimized_schedule,
-        output_path='results/circuit_links.html'
+        output_path='results/circuit_links.html',
+        noise_model=noise_model,
     )
     
     # Create benchmark config
@@ -1250,6 +1323,7 @@ def main():
         decoders=decoders,
         circuit_types=circuit_types,
         optimized_schedule=optimized_schedule,
+        noise_model=noise_model,
         max_errors=max_errors,
         max_time_per_config=max_time_per_config,
         rounds=rounds,
@@ -1265,6 +1339,7 @@ def main():
     print(f"Max errors per config: {max_errors} (early stopping)")
     print(f"Decoders: {decoders}")
     print(f"Circuit types: {circuit_types}")
+    print(f"Noise model: {config.noise_model}")
     print(f"Total configurations: {len(distances) * len(error_rates) * len(circuit_types) * len(decoders)}")
     print("=" * 80 + "\n")
     

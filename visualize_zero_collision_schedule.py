@@ -41,7 +41,7 @@ def load_schedule_from_csv(csv_file: str, index: int = 1):
 
 
 def visualize_schedule(schedule_info: dict, d: int = 7, save_path: str = None, 
-                       show_numbers: bool = True, title: str = None):
+                       show_numbers: bool = True):
     """
     Visualize a zero-collision schedule showing CNOT order numbers.
     
@@ -143,11 +143,11 @@ def visualize_schedule(schedule_info: dict, d: int = 7, save_path: str = None,
                 pos = (anc['x'] + dx, anc['y'] + dy)
                 if pos in data_pos:
                     # Position the number between ancilla and data qubit
-                    num_x = anc['x'] + dx * 0.5
-                    num_y = (anc['y'] + dy * 0.5) * y_scale
+                    num_x = anc['x'] + dx * 0.7
+                    num_y = (anc['y'] + dy * 0.7) * y_scale
                     
                     ax.text(num_x, num_y, str(schedule[i]), 
-                           fontsize=11, fontweight='bold',
+                           fontsize=14, fontweight='bold',
                            color=text_colors[color],
                            ha='center', va='center',
                            zorder=15)
@@ -158,26 +158,6 @@ def visualize_schedule(schedule_info: dict, d: int = 7, save_path: str = None,
     ax.set_ylim(min(all_y) - margin, max(all_y) + margin)
     ax.set_aspect('equal')
     ax.axis('off')
-    
-    # Create title
-    if title is not None:
-        ax.set_title(title, fontsize=12, pad=10)
-    else:
-        idx = schedule_info['index']
-        collisions = schedule_info['collisions']
-        
-        if show_numbers:
-            title_lines = [
-                f"Zero-Collision Schedule #{idx}",
-                f"R={schedule_info['r_schedule']}, G={schedule_info['g_schedule']}, B={schedule_info['b_schedule']}",
-                f"(d={d}, Z-stabilizers) — {collisions} collisions " + ("✓" if collisions == 0 else "✗")
-            ]
-        else:
-            title_lines = [
-                f"Color Code Lattice (d={d})",
-                f"Zero-Collision Schedule #{idx}"
-            ]
-        ax.set_title('\n'.join(title_lines), fontsize=11, pad=10)
     
     plt.tight_layout()
     
@@ -212,9 +192,9 @@ if __name__ == "__main__":
     # Visualize with numbers
     print("\nGenerating visualization with schedule numbers...")
     visualize_schedule(
-        schedule_info, 
+        schedule_info,
         d=d,
-        save_path='results/schedule_visualizations/zero_collision_01_with_numbers.png',
+        save_path='results/schedule_visualizations/zero_collision_01_with_numbers.pdf',
         show_numbers=True
     )
     
@@ -223,6 +203,6 @@ if __name__ == "__main__":
     visualize_schedule(
         schedule_info, 
         d=d,
-        save_path='results/schedule_visualizations/zero_collision_01_lattice_only.png',
+        save_path='results/schedule_visualizations/zero_collision_01_lattice_only.pdf',
         show_numbers=False
     )

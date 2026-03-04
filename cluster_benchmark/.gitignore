@@ -1,0 +1,7 @@
+# Generated and runtime
+output/
+log/
+error/
+job_scripts/
+job_ids_*.txt
+archive/

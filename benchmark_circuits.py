@@ -21,8 +21,6 @@ import time
 
 from color_code_stim import ColorCode
 from tesseract_decoder import tesseract, utils as tesseract_utils
-from mwpf import SinterMWPFDecoder
-
 
 # =============================================================================
 # Custom Sinter Decoders (file-based interface to avoid numpy 2.x issues)
@@ -59,19 +57,19 @@ class TesseractSinterDecoder(sinter.Decoder):
             ),
             no_revisit_dets=True,
         )
-        # Create tesseract decoder with long-beam config
-        tesseract_config = tesseract.TesseractConfig(
-            dem=dem,
-            pqlimit=1_000_000,
-            det_beam=20,
-            beam_climbing=True,
-            det_orders=tesseract_utils.build_det_orders(
-                dem=dem,
-                num_det_orders=21,
-                method=tesseract_utils.DetOrder.DetIndex,
-            ),
-            no_revisit_dets=True,
-        )
+        # # Create tesseract decoder with long-beam config
+        # tesseract_config = tesseract.TesseractConfig(
+        #     dem=dem,
+        #     pqlimit=1_000_000,
+        #     det_beam=20,
+        #     beam_climbing=True,
+        #     det_orders=tesseract_utils.build_det_orders(
+        #         dem=dem,
+        #         num_det_orders=21,
+        #         method=tesseract_utils.DetOrder.DetIndex,
+        #     ),
+        #     no_revisit_dets=True,
+        # )
         decoder = tesseract.TesseractDecoder(tesseract_config)
         
         # Load detector data
@@ -99,8 +97,12 @@ class TesseractSinterDecoder(sinter.Decoder):
 # Hyperion (MWPF): Minimum-Weight Parity Factor decoder for general qLDPC codes
 CUSTOM_SINTER_DECODERS = {
     'tesseract': TesseractSinterDecoder(),
-    'hyperion': SinterMWPFDecoder(cluster_node_limit=200),
 }
+
+
+def get_custom_decoders():
+    """Return custom decoders dict for sinter CLI --custom_decoders_module_function."""
+    return CUSTOM_SINTER_DECODERS
 
 
 # =============================================================================
@@ -294,9 +296,13 @@ def generate_gidney_circuit(circuit_type: str, d: int, rounds: int, p_cnot: floa
         Noiseless circuit; caller applies noise via apply_noise(..., noise_model).
     """
     import sys
-    if 'gidney_circuits/src' not in sys.path:
-        sys.path.insert(0, 'gidney_circuits/src')
-    
+    import os
+    # gidney_circuits lives under syndrome_extraction_optimization (same dir as this file)
+    _benchmark_dir = os.path.dirname(os.path.abspath(__file__))
+    _gidney_src = os.path.join(_benchmark_dir, 'gidney_circuits', 'src')
+    if _gidney_src not in sys.path:
+        sys.path.insert(0, _gidney_src)
+
     import gen
     from clorco.color_code._midout_planar_color_code_circuits import make_midout_color_code_circuit_chunks
     from clorco.color_code._superdense_planar_color_code_circuits import make_superdense_color_code_circuit
@@ -358,9 +364,10 @@ def build_parallel_circuit(d: int, rounds: int, p_cnot: float,
     Returns:
         Noiseless stim.Circuit; caller applies noise via apply_noise(..., noise_model).
     """
-    # Get ColorCode structure for qubit layout
+    # Get ColorCode structure for qubit layout only (skip DEM generation for speed)
     colorcode = ColorCode(d=d, rounds=1, cnot_schedule="tri_optimal", p_cnot=0,
-                         exclude_non_essential_pauli_detectors=True)
+                         exclude_non_essential_pauli_detectors=True,
+                         _generate_dem=False, _decompose_dem=False)
     
     tanner_graph = colorcode.tanner_graph
     anc_Z_qubits = colorcode.qubit_groups['anc_Z']  # reused for X in steps 7-12 after M+RX
@@ -1311,16 +1318,16 @@ def main():
     """Run the full benchmark comparison."""
     
     # Configuration
-    distances = [5,7,9]#[3, 5, 7, 9, 11]
+    distances = [3]#[3, 5, 7, 9, 11]
     error_rates = [0.005]  # 4 key points
     n_shots = 10_000_000  # Max shots
-    max_errors = 1000  # Stop early after 300 errors
+    max_errors = 10  # Stop early after 300 errors
     max_time_per_config = 300
     rounds = None  # Constant number of rounds (set to None for rounds = d)
     decoders = ['tesseract']  # Tesseract + Hyperion (MWPF)
     noise_model = 'depolarize2_after_cnot' # 'tqec_uniform_depolarizing' or 'depolarize2_after_cnot' or 'si1000'
     circuit_types = ['midout', 'optimized_parallel', 'tri_optimal', 'superdense']
-    save_path = 'results/benchmark_results_0.005_depolarize2_after_cnot_fixed_double_midout_rounds_d_5.pkl'
+    save_path = 'results/temp_test.pkl'
     
     # Load zero-collision schedule (for parallelized circuit)
     try:

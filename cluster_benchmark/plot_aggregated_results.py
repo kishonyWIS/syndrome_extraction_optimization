@@ -14,6 +14,7 @@ from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, LogLocator, MultipleLocator
 import pandas as pd
 import sinter
@@ -87,12 +88,41 @@ CIRCUIT_MARKERS = {
     "superdense": "D",
 }
 CIRCUIT_LABELS = {
-    "midout": "0 aux. per plaq. (midout)",
-    "superdense": "2 aux. per plaq. (superdense)",
-    "tri_optimal": "1 aux. per plaq. uniform",
-    "optimized_parallel": "1 aux. per plaq. non-uniform",
+    "midout": "middle-out (0 aux. per plaq.)",
+    "superdense": "superdense (2 aux. per plaq.)",
+    "tri_optimal": "tri-optimal (1 aux. per plaq.)",
+    "optimized_parallel": "color-dependent (1 aux. per plaq.)",
 }
+# Label to show in bold in the legend (optimized_parallel)
+LEGEND_BOLD_LABEL = CIRCUIT_LABELS["optimized_parallel"]
 LEGEND_ORDER = ["midout", "superdense", "tri_optimal", "optimized_parallel"]
+
+
+def _get_legend_handles_labels(axes):
+    """Get legend handles/labels from axis labeled artists, or from existing legend, or proxy artists."""
+    # Try labeled artists on first axis (works even if no legend was created)
+    if axes.size > 0:
+        ax = axes.flat[0]
+        handles, labels = ax.get_legend_handles_labels()
+        if handles and labels:
+            return handles, labels
+        # Fallback: from first existing legend
+        leg = ax.get_legend()
+        if leg is not None:
+            return list(leg.legend_handles), [t.get_text() for t in leg.get_texts()]
+    # Fallback: proxy artists so legend always appears
+    handles = [
+        Line2D(
+            [0], [0],
+            color=CIRCUIT_COLORS.get(ct, "#333333"),
+            marker=CIRCUIT_MARKERS.get(ct, "o"),
+            linestyle="",
+            markersize=10,
+            label=CIRCUIT_LABELS.get(ct, ct),
+        )
+        for ct in LEGEND_ORDER
+    ]
+    return handles, [CIRCUIT_LABELS.get(ct, ct) for ct in LEGEND_ORDER]
 
 
 def group_func(stat: sinter.TaskStats) -> dict:
@@ -247,9 +277,9 @@ def _plot_one_noise_model(
     if n_plots == 0:
         return
 
-    fig_simple, axes_simple = plt.subplots(1, n_plots, figsize=(10 * n_plots, 8), squeeze=False)
+    fig_simple, axes_simple = plt.subplots(1, n_plots, figsize=(10 * n_plots, 10), squeeze=False)
     axes_simple = axes_simple.flatten()
-    fig_full, axes_full = plt.subplots(1, n_plots, figsize=(10 * n_plots, 8), squeeze=False)
+    fig_full, axes_full = plt.subplots(1, n_plots, figsize=(10 * n_plots, 10), squeeze=False)
     axes_full = axes_full.flatten()
 
     for ax_idx, p_cnot in enumerate(error_rates):
@@ -271,6 +301,7 @@ def _plot_one_noise_model(
         # ---- Figure 1: data only (no fit, original limits and ticks) ----
         ax = axes_simple[ax_idx]
         sinter.plot_error_rate(ax=ax, stats=subset, **plot_opts)
+        ax.set_title(f"p={p_cnot}", fontsize=22)
         ax.set_xscale("function", functions=(np.sqrt, np.square))
         ax.set_yscale("log")
         ax.yaxis.set_major_locator(LogLocator(base=10, subs=[1.0], numticks=50))
@@ -278,23 +309,22 @@ def _plot_one_noise_model(
         ax.set_xticks(all_qubits)
         ax.set_xticklabels([str(int(q)) for q in all_qubits])
         ax.set_xlabel("Total Qubits (sqrt scale)", fontsize=22)
-        ax.set_ylabel("Logical Error Rate (per round)", fontsize=22)
+        if ax_idx == 0:
+            ax.set_ylabel("Logical Error Rate (per round)", fontsize=22)
+        else:
+            ax.set_ylabel("")
         ax.tick_params(axis="both", which="major", labelsize=20)
         ax.tick_params(axis="both", which="minor", labelsize=20)
         ax.grid(True, alpha=0.3)
         ax.set_xlim(x_min_data * 0.8, x_max_data * 1.1)
-        ax.set_ylim(y_min_data * 0.2, y_max_data * 2)
+        # ax.set_xlim(0., x_max_data * 1.1)
+        ax.set_ylim(y_min_data * 0.5, y_max_data * 2)
         style_point_labels(ax, subset, plot_opts["x_func"], group_func)
-        leg = ax.get_legend()
-        if leg is None:
-            leg = ax.legend(loc="best", fontsize=22)
-        if leg and leg.get_texts():
-            leg.get_texts()[-1].set_fontweight("bold")
-            leg.get_frame().set_alpha(0.9)
 
         # ---- Figure 2: with fit, extrapolation, extended limits, custom ticks ----
         ax = axes_full[ax_idx]
         sinter.plot_error_rate(ax=ax, stats=subset, **plot_opts)
+        ax.set_title(f"p={p_cnot}", fontsize=22)
         ax.set_xscale("function", functions=(np.sqrt, np.square))
         ax.set_yscale("log")
         ax.yaxis.set_major_locator(LogLocator(base=10, subs=[1.0], numticks=50))
@@ -345,7 +375,10 @@ def _plot_one_noise_model(
 
         ax.xaxis.set_major_formatter(FuncFormatter(_x_label_formatter))
         ax.set_xlabel("Total Qubits (sqrt scale)", fontsize=22)
-        ax.set_ylabel("Logical Error Rate (per round)", fontsize=22)
+        if ax_idx == 0:
+            ax.set_ylabel("Logical Error Rate (per round)", fontsize=22)
+        else:
+            ax.set_ylabel("")
         ax.tick_params(axis="both", which="major", labelsize=20)
         ax.tick_params(axis="both", which="minor", labelsize=20)
         ax.grid(True, alpha=0.3)
@@ -355,26 +388,61 @@ def _plot_one_noise_model(
         ax.set_ylim(TARGET_ERR, y_max)
         ax.axhline(TARGET_ERR, color="gray", linestyle=":", alpha=0.6, linewidth=1, zorder=0.3)
         style_point_labels(ax, subset, plot_opts["x_func"], group_func)
-        leg = ax.get_legend()
-        if leg is None:
-            leg = ax.legend(loc="best", fontsize=22)
-        if leg and leg.get_texts():
-            leg.get_texts()[-1].set_fontweight("bold")
-            leg.get_frame().set_alpha(0.9)
+
+    # Shared legend in a single line along the bottom (in the margin left by rect)
+    legend_kw = dict(
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.06),  # slightly closer to subplots
+        fontsize=22,
+        framealpha=0.9,
+    )
 
     fig_simple.set_dpi(150)
-    fig_full.set_dpi(150)
     plt.figure(fig_simple.number)
-    plt.tight_layout()
+    handles_simple, labels_simple = _get_legend_handles_labels(axes_simple)
+    for ax in axes_simple:
+        if ax.get_legend() is not None:
+            ax.get_legend().remove()
+    plt.tight_layout(rect=[0, 0.08, 1, 1])  # leave bottom margin for shared legend
+    leg_simple = None
+    if handles_simple and labels_simple:
+        leg_simple = fig_simple.legend(
+            handles=handles_simple,
+            labels=labels_simple,
+            ncol=len(labels_simple),
+            **legend_kw,
+        )
+        for t in leg_simple.get_texts():
+            if t.get_text() == LEGEND_BOLD_LABEL:
+                t.set_fontweight("bold")
+
+    fig_full.set_dpi(150)
     plt.figure(fig_full.number)
-    plt.tight_layout()
+    handles_full, labels_full = _get_legend_handles_labels(axes_full)
+    for ax in axes_full:
+        if ax.get_legend() is not None:
+            ax.get_legend().remove()
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
+    leg_full = None
+    if handles_full and labels_full:
+        leg_full = fig_full.legend(
+            handles=handles_full,
+            labels=labels_full,
+            ncol=len(labels_full),
+            **legend_kw,
+        )
+        for t in leg_full.get_texts():
+            if t.get_text() == LEGEND_BOLD_LABEL:
+                t.set_fontweight("bold")
 
     if output_path:
         base, ext = os.path.splitext(output_path)
         out_simple = f"{base}_data_only{ext}"
-        fig_simple.savefig(out_simple, dpi=150, bbox_inches="tight")
+        extra_simple = [leg_simple] if leg_simple is not None else []
+        fig_simple.savefig(out_simple, dpi=150, bbox_inches="tight", bbox_extra_artists=extra_simple)
         print(f"Saved data-only plot to {out_simple}")
-        fig_full.savefig(output_path, dpi=150, bbox_inches="tight")
+        extra_full = [leg_full] if leg_full is not None else []
+        fig_full.savefig(output_path, dpi=150, bbox_inches="tight", bbox_extra_artists=extra_full)
         print(f"Saved plot (with fit/extrapolation) to {output_path}")
 
     if show_after:

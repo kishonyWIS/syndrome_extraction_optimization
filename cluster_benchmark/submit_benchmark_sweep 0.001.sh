@@ -16,23 +16,23 @@ mkdir -p "$CLUSTER_DIR/log" "$CLUSTER_DIR/error" "$CLUSTER_DIR/output" "$CLUSTER
 # -----------------------------------------------------------------------------
 # Sweep (matches user request)
 # -----------------------------------------------------------------------------
-DISTANCES=(7)
+DISTANCES=(9)
 #(3 5 7 9)
 ERROR_RATES=(0.001)
-NOISE_MODELS=(tqec_uniform_depolarizing)
-CIRCUIT_TYPES=(midout optimized_parallel tri_optimal superdense)
+NOISE_MODELS=(si1000)
+# CIRCUIT_TYPES=(midout optimized_parallel tri_optimal superdense)
 # CIRCUIT_TYPES=(optimized_parallel)
 # CIRCUIT_TYPES=(superdense)
-# CIRCUIT_TYPES=(midout)
+CIRCUIT_TYPES=(midout)
 DECODERS=(tesseract)
 
 # Total per config (aggregate_results.py merges chunks)
 # TOTAL_SHOTS=10000000
 TOTAL_MAX_ERRORS=5000
-TOTAL_SHOTS=5000000
+TOTAL_SHOTS=100000000
 
 # Chunking: multiple jobs per config (each runs up to N_SHOTS_PER_CHUNK / MAX_ERRORS_PER_CHUNK)
-CHUNKS_PER_CONFIG=100
+CHUNKS_PER_CONFIG=200
 N_SHOTS_PER_CHUNK=$((TOTAL_SHOTS / CHUNKS_PER_CONFIG))
 MAX_ERRORS_PER_CHUNK=$((TOTAL_MAX_ERRORS / CHUNKS_PER_CONFIG))
 

@@ -16,14 +16,14 @@ mkdir -p "$CLUSTER_DIR/log" "$CLUSTER_DIR/error" "$CLUSTER_DIR/output" "$CLUSTER
 # -----------------------------------------------------------------------------
 # Sweep (matches user request)
 # -----------------------------------------------------------------------------
-DISTANCES=(7)
+DISTANCES=(9)
 #(3 5 7 9)
 ERROR_RATES=(0.0005)
 NOISE_MODELS=(si1000)
-CIRCUIT_TYPES=(midout optimized_parallel tri_optimal superdense)
+# CIRCUIT_TYPES=(midout optimized_parallel tri_optimal superdense)
 # CIRCUIT_TYPES=(optimized_parallel)
 # CIRCUIT_TYPES=(superdense)
-# CIRCUIT_TYPES=(midout)
+CIRCUIT_TYPES=(midout)
 # CIRCUIT_TYPES=(superdense)
 DECODERS=(tesseract)
 

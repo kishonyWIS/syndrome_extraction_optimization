@@ -16,23 +16,24 @@ mkdir -p "$CLUSTER_DIR/log" "$CLUSTER_DIR/error" "$CLUSTER_DIR/output" "$CLUSTER
 # -----------------------------------------------------------------------------
 # Sweep (matches user request)
 # -----------------------------------------------------------------------------
-DISTANCES=(9)
+DISTANCES=(7)
 #(3 5 7 9)
-ERROR_RATES=(0.0001)
-NOISE_MODELS=(si1000)
-# CIRCUIT_TYPES=(midout optimized_parallel tri_optimal superdense)
-# CIRCUIT_TYPES=(optimized_parallel tri_optimal)
+ERROR_RATES=(0.0005)
+NOISE_MODELS=(depolarize2_after_cnot)
+CIRCUIT_TYPES=(midout optimized_parallel tri_optimal superdense)
 # CIRCUIT_TYPES=(optimized_parallel)
 # CIRCUIT_TYPES=(superdense)
-CIRCUIT_TYPES=(midout)
+# CIRCUIT_TYPES=(midout)
+# CIRCUIT_TYPES=(superdense)
 DECODERS=(tesseract)
 
 # Total per config (aggregate_results.py merges chunks)
-TOTAL_MAX_ERRORS=4000
+# TOTAL_SHOTS=10000000
+TOTAL_MAX_ERRORS=5000
 TOTAL_SHOTS=10000000000
 
 # Chunking: multiple jobs per config (each runs up to N_SHOTS_PER_CHUNK / MAX_ERRORS_PER_CHUNK)
-CHUNKS_PER_CONFIG=200
+CHUNKS_PER_CONFIG=400
 N_SHOTS_PER_CHUNK=$((TOTAL_SHOTS / CHUNKS_PER_CONFIG))
 MAX_ERRORS_PER_CHUNK=$((TOTAL_MAX_ERRORS / CHUNKS_PER_CONFIG))
 
@@ -49,7 +50,7 @@ LSF_QUEUE="${LSF_QUEUE:-berg}"
 LSF_NCPUS=4
 # 400 was too low: jobs often OOM'd after first sinter flush (~17 shots). Bump so chunks reach 500k.
 LSF_MEM=800
-LSF_WALLTIME="10:00"
+LSF_WALLTIME="20:00"
 LSF_LOG_DIR="$CLUSTER_DIR/log"
 LSF_ERR_DIR="$CLUSTER_DIR/error"
 # Whitelist of nodes to use (jobs run ONLY on these via bsub -m). Set LSF_ALLOWED_HOSTS="" to disable.

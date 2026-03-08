@@ -153,6 +153,8 @@ class ColorCode:
         _generate_dem: bool = True,
         _decompose_dem: bool = True,
         _benchmarking: bool = False,
+        rounds: Optional[int] = None,
+        p_cnot: float = 0.0,  # Ignored; for API compatibility with benchmark_circuits (noise applied elsewhere)
     ):
         """
         Class for constructing a color code circuit with 2 rounds and correlated errors.
@@ -268,7 +270,7 @@ class ColorCode:
 
         self.d = d
         d2 = self.d2 = d if d2 is None else d2
-        self.rounds = 2  # Hardcoded to 2 rounds
+        self.rounds = rounds if rounds is not None else 2  # Default 2 rounds; benchmark_circuits may pass rounds=1 for layout only
 
         if shape is not None:
             circuit_type = shape

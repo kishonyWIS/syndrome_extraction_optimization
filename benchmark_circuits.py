@@ -59,19 +59,19 @@ class TesseractSinterDecoder(sinter.Decoder):
             ),
             no_revisit_dets=True,
         )
-        # Create tesseract decoder with long-beam config
-        tesseract_config = tesseract.TesseractConfig(
-            dem=dem,
-            pqlimit=1_000_000,
-            det_beam=20,
-            beam_climbing=True,
-            det_orders=tesseract_utils.build_det_orders(
-                dem=dem,
-                num_det_orders=21,
-                method=tesseract_utils.DetOrder.DetIndex,
-            ),
-            no_revisit_dets=True,
-        )
+        # # Create tesseract decoder with long-beam config
+        # tesseract_config = tesseract.TesseractConfig(
+        #     dem=dem,
+        #     pqlimit=1_000_000,
+        #     det_beam=20,
+        #     beam_climbing=True,
+        #     det_orders=tesseract_utils.build_det_orders(
+        #         dem=dem,
+        #         num_det_orders=21,
+        #         method=tesseract_utils.DetOrder.DetIndex,
+        #     ),
+        #     no_revisit_dets=True,
+        # )
         decoder = tesseract.TesseractDecoder(tesseract_config)
         
         # Load detector data
@@ -247,6 +247,7 @@ def apply_noise(circuit: stim.Circuit, p_cnot: float, noise_model: str) -> stim.
             measure_rules={
                 "Z": NoiseRule(after={}, flip_result=p * 5),
                 "X": NoiseRule(after={}, flip_result=p * 5),
+                "Y": NoiseRule(after={}, flip_result=p * 5),  # for stim_memory_xyz (MY) and other Y-measure circuits
             },
             gate_rules={
                 "R": NoiseRule(after={"X_ERROR": p * 2}),
@@ -267,10 +268,12 @@ def apply_noise(circuit: stim.Circuit, p_cnot: float, noise_model: str) -> stim.
             measure_rules={
                 "Z": NoiseRule(after={}, flip_result=p * 5),
                 "X": NoiseRule(after={}, flip_result=p * 5),
+                "Y": NoiseRule(after={}, flip_result=p * 5),
             },
             gate_rules={
                 "R": NoiseRule(after={"X_ERROR": p * 2}),
                 "RX": NoiseRule(after={"Z_ERROR": p * 2}),  # phase flip on |+⟩ reset
+                "RY": NoiseRule(after={"X_ERROR": p * 2}),
             },
         )
         return temporary.noisy_circuit(circuit)
@@ -320,6 +323,24 @@ def generate_gidney_circuit(circuit_type: str, d: int, rounds: int, p_cnot: floa
     
     # Noiseless; caller applies noise via apply_noise(..., noise_model)
     return circuit
+
+
+def build_stim_memory_xyz_circuit(d: int, rounds: int, p_cnot: float) -> stim.Circuit:
+    """
+    Build Stim's built-in color_code:memory_xyz circuit (XYZ memory experiment).
+
+    Uses rounds=rounds, distance=d; noise parameters are zero in the generator.
+    Caller applies noise via apply_noise(..., noise_model).
+    """
+    return stim.Circuit.generated(
+        rounds=rounds,
+        distance=d,
+        after_clifford_depolarization=0,
+        after_reset_flip_probability=0,
+        before_measure_flip_probability=0,
+        before_round_data_depolarization=0,
+        code_task='color_code:memory_xyz',
+    )
 
 
 # Schedule config for tri_optimal: same 6-step Z order for all colors (from ColorCode built-in).
@@ -531,6 +552,157 @@ def build_parallel_circuit(d: int, rounds: int, p_cnot: float,
     return circuit
 
 
+def build_xyz_circuit(d: int, rounds: int, p_cnot: float,
+                      schedule_config: Dict) -> stim.Circuit:
+    """
+    Build XYZ color-code circuit (same layout as build_parallel_circuit).
+
+    Structure: reset; repeat 2 times [ TICK, C_XYZ(data), TICK, 6 CX layers, MR(anc) ];
+    detectors (current ⊕ previous per ancilla); repeat (rounds-2) times [ TICK, C_XYZ(data),
+    TICK, 6 CX, MR(anc) or M(anc) on last, detectors last 3 per ancilla ]; measure data
+    (M/MX/MY by rounds mod 3). Final detectors: rounds≡2(mod3) data⊕last⊕penultimate ancilla;
+    rounds≡0(mod3) data⊕last ancilla only; rounds≡1(mod3) data⊕penultimate ancilla only. Observable.
+
+    Uses only steps 1-6 of the schedule (data -> ancilla CX). Requires rounds >= 2.
+    """
+    if rounds < 2:
+        raise ValueError("build_xyz_circuit requires rounds >= 2")
+    # Same layout and schedule as build_parallel_circuit (only Z block: steps 1-6)
+    colorcode = ColorCode(d=d, rounds=1, cnot_schedule="tri_optimal", p_cnot=0,
+                         exclude_non_essential_pauli_detectors=True)
+    tanner_graph = colorcode.tanner_graph
+    anc_Z_qubits = colorcode.qubit_groups['anc_Z']
+    data_qubits = colorcode.qubit_groups['data']
+    OFFSETS = [(-2, 1), (2, 1), (4, 0), (2, -1), (-2, -1), (-4, 0)]
+
+    def get_data_qid(anc_qubit, offset_idx):
+        offset = OFFSETS[offset_idx % 6]
+        data_x = anc_qubit['x'] + offset[0]
+        data_y = anc_qubit['y'] + offset[1]
+        data_name = f"{data_x}-{data_y}"
+        try:
+            return tanner_graph.vs.find(name=data_name).index
+        except ValueError:
+            return None
+
+    schedules_by_color = {
+        'r': schedule_config['r_schedule'],
+        'g': schedule_config['g_schedule'],
+        'b': schedule_config['b_schedule'],
+    }
+    cnots_by_timestep = {t: [] for t in range(1, 7)}
+    for anc_qubit in anc_Z_qubits:
+        color = anc_qubit['color']
+        schedule = schedules_by_color[color]
+        anc_qid = anc_qubit.index
+        for pos_idx, timestep in enumerate(schedule):
+            data_qid = get_data_qid(anc_qubit, pos_idx)
+            if data_qid is not None:
+                cnots_by_timestep[timestep].append((data_qid, anc_qid))
+
+    data_qids = [dq['qid'] for dq in data_qubits]
+    anc_qids = [anc['qid'] for anc in anc_Z_qubits]
+    num_anc = len(anc_qids)
+    num_data = len(data_qids)
+    used_qids = set(data_qids) | set(anc_qids)
+
+    circuit = stim.Circuit()
+    for v in tanner_graph.vs:
+        if v.index in used_qids:
+            circuit.append("QUBIT_COORDS", [v.index], [v['x'], v['y']])
+
+    # 1. Reset all data and ancillas
+    circuit.append("R", data_qids + anc_qids)
+
+    def do_one_round(use_mr: bool):
+        circuit.append("TICK")
+        circuit.append("C_XYZ", data_qids)
+        circuit.append("TICK")
+        for t in range(1, 7):
+            cx_targets = []
+            for ctrl, targ in cnots_by_timestep[t]:
+                cx_targets.extend([ctrl, targ])
+            if cx_targets:
+                circuit.append("CX", cx_targets)
+            circuit.append("TICK")
+        if use_mr:
+            circuit.append("MR", anc_qids)
+        else:
+            circuit.append("M", anc_qids)
+
+    # 2. First two rounds
+    do_one_round(use_mr=True)
+    do_one_round(use_mr=True)
+
+    # 3. Detectors: each ancilla current ⊕ previous (2 measurements so far)
+    for j, anc in enumerate(anc_Z_qubits):
+        color_val = 0 if anc['color'] == 'r' else (1 if anc['color'] == 'g' else 2)
+        coords = (anc['x'], anc['y'], 0, 2, color_val)
+        circuit.append("DETECTOR", [
+            stim.target_rec(-num_anc + j),
+            stim.target_rec(-2 * num_anc + j),
+        ], coords)
+    circuit.append("SHIFT_COORDS", [], [0, 0, 1])
+
+    # 4. Middle block: repeat (rounds - 2) times
+    n_mid = rounds - 2
+    for i in range(n_mid):
+        is_last_iter = (i == n_mid - 1)
+        do_one_round(use_mr=not is_last_iter)
+        # Detectors: last 3 measurements per ancilla
+        for j, anc in enumerate(anc_Z_qubits):
+            color_val = 0 if anc['color'] == 'r' else (1 if anc['color'] == 'g' else 2)
+            coords = (anc['x'], anc['y'], 0, 16, color_val)
+            circuit.append("DETECTOR", [
+                stim.target_rec(-num_anc + j),
+                stim.target_rec(-2 * num_anc + j),
+                stim.target_rec(-3 * num_anc + j),
+            ], coords)
+        circuit.append("SHIFT_COORDS", [], [0, 0, 1])
+
+    # 5. Measure data qubits: basis by rounds mod 3
+    r3 = rounds % 3
+    if r3 == 0:
+        circuit.append("M", data_qids)
+    elif r3 == 1:
+        circuit.append("MX", data_qids)
+    else:
+        circuit.append("MY", data_qids)
+
+    # 6. Final detectors: data ⊕ ancilla ref(s) depending on rounds mod 3
+    # rounds ≡ 2 (mod 3): data ⊕ last ⊕ penultimate ancilla (as in round-2 style)
+    # rounds ≡ 0 (mod 3): data ⊕ LAST measurement of corresponding auxiliary only
+    # rounds ≡ 1 (mod 3): data ⊕ PENULTIMATE measurement of corresponding auxiliary only
+    last_anc_rec = -num_data - num_anc
+    penultimate_anc_rec = -num_data - 2 * num_anc
+    for j, anc in enumerate(anc_Z_qubits):
+        color_val = 0 if anc['color'] == 'r' else (1 if anc['color'] == 'g' else 2)
+        coords = (anc['x'], anc['y'], 0, 2, color_val)
+        connected_data = []
+        for pos_idx in range(6):
+            data_qid = get_data_qid(anc, pos_idx)
+            if data_qid is not None:
+                connected_data.append(data_qid)
+        targets = []
+        for dq in connected_data:
+            targets.append(stim.target_rec(-num_data + data_qids.index(dq)))
+        if r3 == 2:
+            targets.append(stim.target_rec(penultimate_anc_rec + j))
+            targets.append(stim.target_rec(last_anc_rec + j))
+        elif r3 == 0:
+            targets.append(stim.target_rec(last_anc_rec + j))
+        else:  # r3 == 1
+            targets.append(stim.target_rec(penultimate_anc_rec + j))
+        circuit.append("DETECTOR", targets, coords)
+
+    # 7. Observable (top row for Z memory)
+    top_row_qids = [dq['qid'] for dq in data_qubits if dq['y'] == 0]
+    obs_targets = [stim.target_rec(-num_data + data_qids.index(qid)) for qid in top_row_qids]
+    circuit.append("OBSERVABLE_INCLUDE", obs_targets, 0)
+
+    return circuit
+
+
 # =============================================================================
 # Benchmark Runner
 # =============================================================================
@@ -542,7 +714,7 @@ class BenchmarkConfig:
     error_rates: List[float]
     n_shots: int
     decoders: List[str]  # 'tesseract' or 'hyperion'
-    circuit_types: List[str]  # 'optimized_parallel', 'tri_optimal', 'midout', 'superdense'
+    circuit_types: List[str]  # 'optimized_parallel', 'optimized_parallel_XYZ', 'tri_optimal', 'tri_optimal_XYZ', 'midout', 'superdense', 'stim_memory_xyz'
     optimized_schedule: Optional[Dict] = None
     noise_model: str = 'depolarize2_after_cnot'  # or 'tqec_uniform_depolarizing' or 'si1000' or 'temporary'
     max_errors: Optional[int] = None  # Stop early after this many errors
@@ -706,8 +878,16 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
                         test_circuit = build_parallel_circuit(d, rounds, 0.001, config.optimized_schedule)
                     elif circuit_type == 'tri_optimal':
                         test_circuit = build_tri_optimal_circuit(d, rounds, 0.001)
+                    elif circuit_type == 'tri_optimal_XYZ':
+                        test_circuit = build_xyz_circuit(d, rounds, 0.001, TRI_OPTIMAL_SCHEDULE_CONFIG)
                     elif circuit_type in ['midout', 'superdense']:
                         test_circuit = generate_gidney_circuit(circuit_type, d, rounds, 0.001)
+                    elif circuit_type == 'stim_memory_xyz':
+                        test_circuit = build_stim_memory_xyz_circuit(d, rounds, 0.001)
+                    elif circuit_type == 'optimized_parallel_XYZ':
+                        if config.optimized_schedule is None:
+                            continue
+                        test_circuit = build_xyz_circuit(d, rounds, 0.001, config.optimized_schedule)
                     else:
                         continue
                     # Apply noise so detector error model has errors; search needs them to find undetectable logical errors
@@ -731,8 +911,17 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
                             circuit = build_parallel_circuit(d, rounds, p_cnot, config.optimized_schedule)
                         elif circuit_type == 'tri_optimal':
                             circuit = build_tri_optimal_circuit(d, rounds, p_cnot)
+                        elif circuit_type == 'tri_optimal_XYZ':
+                            circuit = build_xyz_circuit(d, rounds, p_cnot, TRI_OPTIMAL_SCHEDULE_CONFIG)
                         elif circuit_type in ['midout', 'superdense']:
                             circuit = generate_gidney_circuit(circuit_type, d, rounds, p_cnot)
+                        elif circuit_type == 'stim_memory_xyz':
+                            circuit = build_stim_memory_xyz_circuit(d, rounds, p_cnot)
+                        elif circuit_type == 'optimized_parallel_XYZ':
+                            if config.optimized_schedule is None:
+                                print(f"      Skipping (no schedule)")
+                                continue
+                            circuit = build_xyz_circuit(d, rounds, p_cnot, config.optimized_schedule)
                         else:
                             continue
                         circuit = apply_noise(circuit, p_cnot, config.noise_model)
@@ -859,12 +1048,19 @@ def generate_circuit_links_html(d: int, rounds: int, p_cnot: float,
             circuits['Optimized (parallel)'] = _build_and_noise(build_parallel_circuit, d, rounds, p_cnot, optimized_schedule)
         except Exception as e:
             print(f"Error building optimized_parallel circuit: {e}")
+        try:
+            circuits['Optimized (parallel, XYZ)'] = _build_and_noise(build_xyz_circuit, d, rounds, p_cnot, optimized_schedule)
+        except Exception as e:
+            print(f"Error building optimized_parallel_XYZ circuit: {e}")
     
     try:
         circuits['Tri-Optimal'] = _build_and_noise(build_tri_optimal_circuit, d, rounds, p_cnot)
     except Exception as e:
         print(f"Error building tri_optimal circuit: {e}")
-    
+    try:
+        circuits['Tri-Optimal XYZ'] = _build_and_noise(build_xyz_circuit, d, rounds, p_cnot, TRI_OPTIMAL_SCHEDULE_CONFIG)
+    except Exception as e:
+        print(f"Error building tri_optimal_XYZ circuit: {e}")
     try:
         circuits['Midout (Gidney)'] = _build_and_noise(generate_gidney_circuit, 'midout', d, rounds, p_cnot)
     except Exception as e:
@@ -874,6 +1070,11 @@ def generate_circuit_links_html(d: int, rounds: int, p_cnot: float,
         circuits['Superdense (Gidney)'] = _build_and_noise(generate_gidney_circuit, 'superdense', d, rounds, p_cnot)
     except Exception as e:
         print(f"Error building superdense circuit: {e}")
+    
+    try:
+        circuits['Stim memory_xyz'] = _build_and_noise(build_stim_memory_xyz_circuit, d, rounds, p_cnot)
+    except Exception as e:
+        print(f"Error building stim_memory_xyz circuit: {e}")
     
     # Generate HTML
     html = f'''<!DOCTYPE html>
@@ -1105,10 +1306,12 @@ def compute_qubit_count(d: int, circuit_type: str) -> int:
     # Auxiliaries per plaquette based on circuit type
     if circuit_type == 'superdense':
         aux_per_plaquette = 2
-    elif circuit_type in ['tri_optimal', 'optimized_parallel']:
+    elif circuit_type in ['tri_optimal', 'tri_optimal_XYZ', 'optimized_parallel', 'optimized_parallel_XYZ']:
         aux_per_plaquette = 1
     elif circuit_type == 'midout':
         aux_per_plaquette = 0
+    elif circuit_type == 'stim_memory_xyz':
+        aux_per_plaquette = 1  # one measurement qubit per tile (Stim's memory_xyz)
     else:
         aux_per_plaquette = 1  # default
     
@@ -1168,24 +1371,33 @@ def plot_error_vs_qubits(df: pd.DataFrame, decoder: str = None,
     # Color and marker maps for circuit types
     circuit_colors = {
         'optimized_parallel': '#2ecc71',  # green
+        'optimized_parallel_XYZ': '#1abc9c',  # teal
         'tri_optimal': '#3498db',         # blue
+        'tri_optimal_XYZ': '#16a085',     # dark teal
         'midout': '#e74c3c',              # red
-        'superdense': '#9b59b6',          # purple
+        'superdense': '#9b59b6',         # purple
+        'stim_memory_xyz': '#f39c12',    # orange
     }
     circuit_markers = {
         'optimized_parallel': 'o',
+        'optimized_parallel_XYZ': 'p',
         'tri_optimal': 's',
+        'tri_optimal_XYZ': 'P',
         'midout': '^',
         'superdense': 'D',
+        'stim_memory_xyz': 'v',
     }
     # Legend display labels and order (last will be bold)
     circuit_display_labels = {
         'midout': '0 aux. per plaq. (midout)',
         'superdense': '2 aux. per plaq. (superdense)',
         'tri_optimal': '1 aux. per plaq. uniform',
+        'tri_optimal_XYZ': 'Tri-optimal XYZ',
         'optimized_parallel': '1 aux. per plaq. non-uniform',
+        'optimized_parallel_XYZ': 'Optimized parallel XYZ',
+        'stim_memory_xyz': 'Stim color_code:memory_xyz',
     }
-    legend_order = ['midout', 'superdense', 'tri_optimal', 'optimized_parallel']
+    legend_order = ['midout', 'superdense', 'tri_optimal', 'tri_optimal_XYZ', 'optimized_parallel', 'optimized_parallel_XYZ', 'stim_memory_xyz']
     
     for ax_idx, p_cnot in enumerate(error_rates):
         ax = axes[ax_idx]
@@ -1311,16 +1523,16 @@ def main():
     """Run the full benchmark comparison."""
     
     # Configuration
-    distances = [5,7,9]#[3, 5, 7, 9, 11]
-    error_rates = [0.005]  # 4 key points
+    distances = [3, 5]#[3, 5, 7, 9, 11]
+    error_rates = [0.001]  # 4 key points
     n_shots = 10_000_000  # Max shots
-    max_errors = 1000  # Stop early after 300 errors
+    max_errors = 300  # Stop early after 300 errors
     max_time_per_config = 300
     rounds = None  # Constant number of rounds (set to None for rounds = d)
     decoders = ['tesseract']  # Tesseract + Hyperion (MWPF)
-    noise_model = 'depolarize2_after_cnot' # 'tqec_uniform_depolarizing' or 'depolarize2_after_cnot' or 'si1000'
-    circuit_types = ['midout', 'optimized_parallel', 'tri_optimal', 'superdense']
-    save_path = 'results/benchmark_results_0.005_depolarize2_after_cnot_fixed_double_midout_rounds_d_5.pkl'
+    noise_model = 'si1000' # 'tqec_uniform_depolarizing' or 'depolarize2_after_cnot' or 'si1000'
+    circuit_types = ['optimized_parallel_XYZ', 'tri_optimal_XYZ', 'stim_memory_xyz', 'midout', 'optimized_parallel', 'tri_optimal', 'superdense']
+    save_path = 'results/benchmark_results_compare_with_XYZ.pkl'
     
     # Load zero-collision schedule (for parallelized circuit)
     try:

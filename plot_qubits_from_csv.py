@@ -17,7 +17,7 @@ def compute_qubit_count(d: int, circuit_type: str) -> int:
     """Total qubits for triangular color code (same as benchmark_circuits)."""
     data_qubits = (3 * d * d + 1) // 4
     num_plaquettes = 3 * (d * d - 1) // 8
-    if circuit_type == 'superdense':
+    if circuit_type in ['superdense', 'superdense_modified']:
         aux_per_plaquette = 2
     elif circuit_type in ['tri_optimal', 'tri_optimal_XYZ', 'optimized_parallel', 'optimized_parallel_XYZ', 'stim_memory_xyz']:
         aux_per_plaquette = 1

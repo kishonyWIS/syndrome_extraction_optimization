@@ -92,11 +92,79 @@ class TesseractSinterDecoder(sinter.Decoder):
         )
 
 
+class BposdCompiledDecoder(sinter.CompiledDecoder):
+    """Compiled BPOSD decoder for a given DEM (used by BPOSDSinterDecoder)."""
+    def __init__(self, dem: stim.DetectorErrorModel, matrices, decoder):
+        self.dem = dem
+        self.matrices = matrices
+        self.decoder = decoder
+        self._num_dets = dem.num_detectors
+        self._num_obs = dem.num_observables
+        self._num_det_bytes = -(-self._num_dets // 8)
+        self._num_obs_bytes = -(-self._num_obs // 8)
+
+    def decode_shots_bit_packed(
+        self,
+        *,
+        bit_packed_detection_event_data: np.ndarray,
+    ) -> np.ndarray:
+        num_shots = bit_packed_detection_event_data.shape[0]
+        # Unpack detector bits (little-endian)
+        det_bits = np.unpackbits(
+            bit_packed_detection_event_data, axis=1, bitorder='little'
+        )[:, :self._num_dets]
+        obs_predictions = np.zeros((num_shots, self._num_obs_bytes), dtype=np.uint8)
+        for i in range(num_shots):
+            syndrome = det_bits[i].astype(np.float64)
+            error = self.decoder.decode(syndrome)
+            obs = np.asarray(
+                (self.matrices.observables_matrix @ error).flatten() % 2,
+                dtype=np.uint8,
+            )[:self._num_obs]
+            padded = np.zeros(self._num_obs_bytes * 8, dtype=np.uint8)
+            padded[:self._num_obs] = obs[:self._num_obs]
+            obs_predictions[i] = np.packbits(padded, bitorder='little')
+        return obs_predictions
+
+
+class BPOSDSinterDecoder(sinter.Decoder):
+    """Sinter decoder wrapper for ldpc BPOSD (belief propagation + ordered statistics decoding)."""
+    def __init__(self, max_iter: int = 104, osd_order: int = 7, bp_method: str = "ms",
+                 ms_scaling_factor: float = 0.0, osd_method: str = 'OSD_CS'):
+        self.max_iter = max_iter
+        self.osd_order = osd_order
+        self.bp_method = bp_method
+        self.ms_scaling_factor = ms_scaling_factor
+        self.osd_method = osd_method
+
+    def compile_decoder_for_dem(self, *, dem: stim.DetectorErrorModel) -> sinter.CompiledDecoder:
+        from ldpc.ckt_noise.dem_matrices import detector_error_model_to_check_matrices
+        from ldpc.bposd_decoder import BpOsdDecoder
+        matrices = detector_error_model_to_check_matrices(
+            dem, allow_undecomposed_hyperedges=True
+        )
+        decoder = BpOsdDecoder(
+            matrices.check_matrix,
+            error_channel=list(matrices.priors),
+            max_iter=self.max_iter,
+            bp_method=self.bp_method,
+            ms_scaling_factor=self.ms_scaling_factor,
+            schedule="parallel",
+            omp_thread_count=1,
+            serial_schedule_order=None,
+            osd_order=self.osd_order,
+            osd_method=self.osd_method,
+        )
+        return BposdCompiledDecoder(dem, matrices, decoder)
+
+
 # Custom decoder registry for sinter
 # Tesseract: hypergraph decoder optimized for color codes
 # Hyperion (MWPF): Minimum-Weight Parity Factor decoder for general qLDPC codes
+# bposd: BP+OSD from ldpc library
 CUSTOM_SINTER_DECODERS = {
     'tesseract': TesseractSinterDecoder(),
+    'bposd': BPOSDSinterDecoder(),
 }
 
 
@@ -290,7 +358,7 @@ def generate_gidney_circuit(circuit_type: str, d: int, rounds: int, p_cnot: floa
     Generate Gidney's circuit using code from Zenodo with custom parameters.
     
     Args:
-        circuit_type: 'midout' or 'superdense'
+        circuit_type: 'midout', 'superdense', or 'superdense_modified'
         d: Code distance (base_width for midout, base_data_width for superdense)
         rounds: Number of syndrome extraction rounds
         p_cnot: Unused (kept for API); apply noise via apply_noise(..., noise_model).
@@ -323,6 +391,14 @@ def generate_gidney_circuit(circuit_type: str, d: int, rounds: int, p_cnot: floa
             base_data_width=d,
             basis='Z',
             rounds=rounds,
+            cnot_schedule='original',
+        )
+    elif circuit_type == 'superdense_modified':
+        circuit = make_superdense_color_code_circuit(
+            base_data_width=d,
+            basis='Z',
+            rounds=rounds,
+            cnot_schedule='modified',
         )
     else:
         raise ValueError(f"Unknown circuit type: {circuit_type}")
@@ -720,8 +796,8 @@ class BenchmarkConfig:
     distances: List[int]
     error_rates: List[float]
     n_shots: int
-    decoders: List[str]  # 'tesseract' or 'hyperion'
-    circuit_types: List[str]  # 'optimized_parallel', 'optimized_parallel_XYZ', 'tri_optimal', 'tri_optimal_XYZ', 'midout', 'superdense', 'stim_memory_xyz'
+    decoders: List[str]  # 'tesseract', 'bposd', or 'hyperion'
+    circuit_types: List[str]  # e.g. 'optimized_parallel', 'tri_optimal_XYZ', 'midout', 'superdense', 'superdense_modified', 'stim_memory_xyz'
     optimized_schedule: Optional[Dict] = None
     noise_model: str = 'depolarize2_after_cnot'  # or 'tqec_uniform_depolarizing' or 'si1000' or 'temporary'
     max_errors: Optional[int] = None  # Stop early after this many errors
@@ -762,7 +838,7 @@ def run_sinter_single_task(
     
     Args:
         circuit: The stim circuit to benchmark
-        decoder: Decoder name ('tesseract' or 'hyperion')
+        decoder: Decoder name ('tesseract', 'bposd', or 'hyperion')
         metadata: Dictionary with configuration metadata
         max_shots: Maximum shots per task
         max_errors: Maximum errors for early stopping
@@ -887,7 +963,7 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
                         test_circuit = build_tri_optimal_circuit(d, rounds, 0.001)
                     elif circuit_type == 'tri_optimal_XYZ':
                         test_circuit = build_xyz_circuit(d, rounds, 0.001, TRI_OPTIMAL_SCHEDULE_CONFIG)
-                    elif circuit_type in ['midout', 'superdense']:
+                    elif circuit_type in ['midout', 'superdense', 'superdense_modified']:
                         test_circuit = generate_gidney_circuit(circuit_type, d, rounds, 0.001)
                     elif circuit_type == 'stim_memory_xyz':
                         test_circuit = build_stim_memory_xyz_circuit(d, rounds, 0.001)
@@ -920,7 +996,7 @@ def run_benchmark_sinter(config: BenchmarkConfig, save_path: str = None,
                             circuit = build_tri_optimal_circuit(d, rounds, p_cnot)
                         elif circuit_type == 'tri_optimal_XYZ':
                             circuit = build_xyz_circuit(d, rounds, p_cnot, TRI_OPTIMAL_SCHEDULE_CONFIG)
-                        elif circuit_type in ['midout', 'superdense']:
+                        elif circuit_type in ['midout', 'superdense', 'superdense_modified']:
                             circuit = generate_gidney_circuit(circuit_type, d, rounds, p_cnot)
                         elif circuit_type == 'stim_memory_xyz':
                             circuit = build_stim_memory_xyz_circuit(d, rounds, p_cnot)
@@ -1077,7 +1153,10 @@ def generate_circuit_links_html(d: int, rounds: int, p_cnot: float,
         circuits['Superdense (Gidney)'] = _build_and_noise(generate_gidney_circuit, 'superdense', d, rounds, p_cnot)
     except Exception as e:
         print(f"Error building superdense circuit: {e}")
-    
+    try:
+        circuits['Superdense modified (Gidney)'] = _build_and_noise(generate_gidney_circuit, 'superdense_modified', d, rounds, p_cnot)
+    except Exception as e:
+        print(f"Error building superdense_modified circuit: {e}")
     try:
         circuits['Stim memory_xyz'] = _build_and_noise(build_stim_memory_xyz_circuit, d, rounds, p_cnot)
     except Exception as e:
@@ -1311,7 +1390,7 @@ def compute_qubit_count(d: int, circuit_type: str) -> int:
     num_plaquettes = 3 * (d * d - 1) // 8
     
     # Auxiliaries per plaquette based on circuit type
-    if circuit_type == 'superdense':
+    if circuit_type in ['superdense', 'superdense_modified']:
         aux_per_plaquette = 2
     elif circuit_type in ['tri_optimal', 'tri_optimal_XYZ', 'optimized_parallel', 'optimized_parallel_XYZ']:
         aux_per_plaquette = 1
@@ -1383,6 +1462,7 @@ def plot_error_vs_qubits(df: pd.DataFrame, decoder: str = None,
         'tri_optimal_XYZ': '#16a085',     # dark teal
         'midout': '#e74c3c',              # red
         'superdense': '#9b59b6',         # purple
+        'superdense_modified': '#8e44ad', # darker purple
         'stim_memory_xyz': '#f39c12',    # orange
     }
     circuit_markers = {
@@ -1392,19 +1472,21 @@ def plot_error_vs_qubits(df: pd.DataFrame, decoder: str = None,
         'tri_optimal_XYZ': 'P',
         'midout': '^',
         'superdense': 'D',
+        'superdense_modified': 'X',
         'stim_memory_xyz': 'v',
     }
     # Legend display labels and order (last will be bold)
     circuit_display_labels = {
         'midout': '0 aux. per plaq. (midout)',
         'superdense': '2 aux. per plaq. (superdense)',
+        'superdense_modified': '2 aux. per plaq. (superdense modified)',
         'tri_optimal': '1 aux. per plaq. uniform',
         'tri_optimal_XYZ': 'Tri-optimal XYZ',
         'optimized_parallel': '1 aux. per plaq. non-uniform',
         'optimized_parallel_XYZ': 'Optimized parallel XYZ',
         'stim_memory_xyz': 'Stim color_code:memory_xyz',
     }
-    legend_order = ['midout', 'superdense', 'tri_optimal', 'tri_optimal_XYZ', 'optimized_parallel', 'optimized_parallel_XYZ', 'stim_memory_xyz']
+    legend_order = ['midout', 'superdense', 'superdense_modified', 'tri_optimal', 'tri_optimal_XYZ', 'optimized_parallel', 'optimized_parallel_XYZ', 'stim_memory_xyz']
     
     for ax_idx, p_cnot in enumerate(error_rates):
         ax = axes[ax_idx]
@@ -1530,16 +1612,16 @@ def main():
     """Run the full benchmark comparison."""
     
     # Configuration
-    distances = [3, 5]#[3, 5, 7, 9, 11]
-    error_rates = [0.001]  # 4 key points
-    n_shots = 10_000_000  # Max shots
-    max_errors = 300  # Stop early after 300 errors
+    distances = [3, 5, 7]#[3, 5, 7, 9, 11]
+    error_rates = [0.005]  # 4 key points
+    n_shots = 100_000  # Max shots
+    max_errors = 5000  # Stop early after 300 errors
     max_time_per_config = 300
     rounds = None  # Constant number of rounds (set to None for rounds = d)
     decoders = ['tesseract']  # Tesseract + Hyperion (MWPF)
-    noise_model = 'si1000' # 'tqec_uniform_depolarizing' or 'depolarize2_after_cnot' or 'si1000'
-    circuit_types = ['optimized_parallel_XYZ', 'tri_optimal_XYZ', 'stim_memory_xyz', 'midout', 'optimized_parallel', 'tri_optimal', 'superdense']
-    save_path = 'results/benchmark_results_compare_with_XYZ.pkl'
+    noise_model = 'depolarize2_after_cnot' # 'tqec_uniform_depolarizing' or 'depolarize2_after_cnot' or 'si1000'
+    circuit_types = ['superdense', 'superdense_modified']#['optimized_parallel_XYZ', 'tri_optimal_XYZ', 'midout', 'optimized_parallel', 'tri_optimal', 'superdense']
+    save_path = 'results/benchmark_results_superdense_default_order.pkl'
     
     # Load zero-collision schedule (for parallelized circuit)
     try:

@@ -88,6 +88,7 @@ def make_superdense_color_code_circuit_round_chunk(
     initialize: bool,
     basis: Literal["X", "Z"],
     base_data_width: int,
+    cnot_schedule: Literal["original", "modified"] = "original",
 ) -> gen.Chunk:
     code = make_color_code_layout_for_superdense(
         base_data_width=base_data_width,
@@ -119,28 +120,53 @@ def make_superdense_color_code_circuit_round_chunk(
     builder.gate("RZ", z_ms)
     builder.tick()
 
-    do_cxs(x_ms, +0, +1)
-    builder.tick()
-    do_cxs(x_ms, +1j, +0)
-    do_cxs(z_ms, +1j, +0)
-    builder.tick()
-    do_cxs(x_ms, -1, +0)
-    do_cxs(z_ms, +1, +0)
-    builder.tick()
-    do_cxs(x_ms, -1j, +0)
-    do_cxs(z_ms, -1j, +0)
-    builder.tick()
-    do_cxs(x_ms, +0, +1j)
-    do_cxs(z_ms, +0, +1j)
-    builder.tick()
-    do_cxs(x_ms, +0, -1)
-    do_cxs(z_ms, +0, +1)
-    builder.tick()
-    do_cxs(x_ms, +0, -1j)
-    do_cxs(z_ms, +0, -1j)
-    builder.tick()
-    do_cxs(x_ms, +0, +1)
-    builder.tick()
+    if cnot_schedule == "original":
+        do_cxs(x_ms, +0, +1)
+        builder.tick()
+        do_cxs(x_ms, +1j, +0)
+        do_cxs(z_ms, +1j, +0)
+        builder.tick()
+        do_cxs(x_ms, -1, +0)
+        do_cxs(z_ms, +1, +0)
+        builder.tick()
+        do_cxs(x_ms, -1j, +0)
+        do_cxs(z_ms, -1j, +0)
+        builder.tick()
+        do_cxs(x_ms, +0, +1j)
+        do_cxs(z_ms, +0, +1j)
+        builder.tick()
+        do_cxs(x_ms, +0, -1)
+        do_cxs(z_ms, +0, +1)
+        builder.tick()
+        do_cxs(x_ms, +0, -1j)
+        do_cxs(z_ms, +0, -1j)
+        builder.tick()
+        do_cxs(x_ms, +0, +1)
+        builder.tick()
+    else:
+        # modified: swap 2nd and 3rd tick blocks (-1 before +1j)
+        do_cxs(x_ms, +0, +1)
+        builder.tick()
+        do_cxs(x_ms, -1, +0)
+        do_cxs(z_ms, +1, +0)
+        builder.tick()
+        do_cxs(x_ms, +1j, +0)
+        do_cxs(z_ms, +1j, +0)
+        builder.tick()
+        do_cxs(x_ms, -1j, +0)
+        do_cxs(z_ms, -1j, +0)
+        builder.tick()
+        do_cxs(x_ms, +0, -1)
+        do_cxs(z_ms, +0, +1)
+        builder.tick()
+        do_cxs(x_ms, +0, +1j)
+        do_cxs(z_ms, +0, +1j)
+        builder.tick()
+        do_cxs(x_ms, +0, -1j)
+        do_cxs(z_ms, +0, -1j)
+        builder.tick()
+        do_cxs(x_ms, +0, +1)
+        builder.tick()
 
     builder.measure(x_ms, basis="X", save_layer="solo")
     builder.measure(z_ms, basis="Z", save_layer="solo")
@@ -247,6 +273,7 @@ def make_superdense_color_code_circuit(
     base_data_width: int,
     basis: Literal["X", "Z"],
     rounds: int,
+    cnot_schedule: Literal["original", "modified"] = "original",
 ) -> stim.Circuit:
     assert rounds >= 2
 
@@ -254,11 +281,13 @@ def make_superdense_color_code_circuit(
         initialize=True,
         basis=basis,
         base_data_width=base_data_width,
+        cnot_schedule=cnot_schedule,
     )
     mid_round = make_superdense_color_code_circuit_round_chunk(
         initialize=False,
         basis=basis,
         base_data_width=base_data_width,
+        cnot_schedule=cnot_schedule,
     )
     end_round = first_round.inverted()
 

@@ -1,8 +1,0 @@
-# Generated and runtime
-output/*
-!output/aggregated_results.csv
-log/
-error/
-job_scripts/
-job_ids_*.txt
-archive/

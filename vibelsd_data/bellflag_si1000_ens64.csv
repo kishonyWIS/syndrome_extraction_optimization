@@ -1,5 +1,0 @@
-shots,errors,discards,seconds,decoder,strong_id,json_metadata,custom_counts
-9117750,813,0,0,VLSD-64,bellflag_si_res_1330.0001,"{""d"":3,""p"":0.0001,""r"":3,""c"":""Bell Flagged"",""q"":13,""SELSD calls"":80}",
-30000000,81,0,0,VLSD-64,bellflag_si_res_1350.0001,"{""d"":5,""p"":0.0001,""r"":5,""c"":""Bell Flagged"",""q"":37,""SELSD calls"":1626}",
-30000000,5,0,0,VLSD-64,bellflag_si_res_1370.0001,"{""d"":7,""p"":0.0001,""r"":7,""c"":""Bell Flagged"",""q"":73,""SELSD calls"":3288}",
-

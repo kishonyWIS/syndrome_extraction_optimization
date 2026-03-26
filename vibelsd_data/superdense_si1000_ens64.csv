@@ -1,6 +1,0 @@
-shots,errors,discards,seconds,decoder,strong_id,json_metadata,custom_counts
-165760,1009,0,0,VLSD-64,superdense_si_res_1330.001,"{""d"":3,""p"":0.001,""r"":3,""c"":""Superdense"",""q"":13,""SELSD calls"":43}",
-416037,1000,0,0,VLSD-64,superdense_si_res_1350.001,"{""d"":5,""p"":0.001,""r"":5,""c"":""Superdense"",""q"":37,""SELSD calls"":2643}",
-1050484,967,0,0,VLSD-64,superdense_si_res_1370.001,"{""d"":7,""p"":0.001,""r"":7,""c"":""Superdense"",""q"":73,""SELSD calls"":20115}",
-719800,242,0,0,VLSD-64,superdense_si_res_1390.001,"{""d"":9,""p"":0.001,""r"":9,""c"":""Superdense"",""q"":121,""SELSD calls"":28336}",
-505240,71,0,0,VLSD-64,superdense_si_res_13110.001,"{""d"":11,""p"":0.001,""r"":11,""c"":""Superdense"",""q"":181,""SELSD calls"":36159}",

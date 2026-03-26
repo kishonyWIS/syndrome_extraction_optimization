@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 import time
 
-from color_code_stim import ColorCode
+from color_code_stim_local import ColorCode
 from tesseract_decoder import tesseract, utils as tesseract_utils
 
 # =============================================================================

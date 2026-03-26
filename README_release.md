@@ -18,14 +18,12 @@ for circuit generation, schedule handling, and benchmark/plot reproduction.
 
 ### Important runtime note
 
-`benchmark_circuits.py` imports `color_code_stim`. In this repository snapshot,
-the local venv package files needed for that import include:
+`benchmark_circuits.py` now imports `ColorCode` from the in-repo fork:
 
-- `venv_3_11_syndrome_extraction_opt/lib/python3.11/site-packages/color_code_stim/color_code.py`
-- `venv_3_11_syndrome_extraction_opt/lib/python3.11/site-packages/color_code_stim/visualization.py`
+- `color_code_stim_local/`
 
-If you run in a different environment, ensure your installed `color_code_stim`
-package includes these modules.
+This avoids relying on modified package files inside a local venv and makes
+the provenance explicit in the repository itself.
 
 ### Quick run
 
